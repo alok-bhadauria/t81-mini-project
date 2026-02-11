@@ -1,0 +1,56 @@
+TECH STACK:
+
+---------------------------------------------------------------------
+
+01. Backend & API:
+
+Python: Core backend language.
+FastAPI: Lightweight, high-performance REST API framework.
+Uvicorn: ASGI server for running FastAPI.
+Docker: Containerizes backend for portability and easy deployment.
+
+---------------------------------------------------------------------
+
+02. NLP & ML:
+
+spaCy (open-source): Tokenization, POS tagging, dependency parsing.
+HuggingFace Transformers (open-source models): Sentence-level emotion classification.
+Pretrained small model (e.g., distilbert-base-uncased-finetuned-sst-2): Free emotion/sentiment model.
+
+---------------------------------------------------------------------
+
+03. Speech-to-Text (Optional):
+
+OpenAI Whisper (open-source local model) or Vosk: Free offline speech recognition.
+
+---------------------------------------------------------------------
+
+04. Data & Mapping:
+
+JSON files: Gesture ID → animation path mapping.
+SQLite (optional): Lightweight local database if structured storage needed.
+Redis (optional later): In-memory caching.
+
+---------------------------------------------------------------------
+
+05. 3D & Animation:
+
+Blender: Create and export avatar and animation clips.
+GLB (glTF 2.0): Efficient 3D format for web.
+
+---------------------------------------------------------------------
+
+06. Frontend:
+
+React.js: UI framework.
+Three.js: WebGL-based 3D rendering engine.
+GLTFLoader (Three.js): Loads 3D models.
+AnimationMixer (Three.js): Controls animation playback and blending.
+
+---------------------------------------------------------------------
+
+07. Deployment:
+
+Render (Free tier): Host frontend and optionally backend.
+If backend not stable on free tier → Docker container hosted locally.
+Local hosting exposed via: Cloudflare Tunnel (free), ngrok (free tier)

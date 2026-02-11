@@ -1,0 +1,181 @@
+V1-ARCHITECTURE:
+
+---------------------------------------------------------------------
+
+01. Objective (v1.0): 
+
+Deliver a working prototype that converts simple English sentences into structured ASL animation using a 3D avatar with sentence-level emotion.
+Success Targets:
+    • Animation start ≤ 5 seconds
+    • ≥ 80% grammar correctness (controlled sentences)
+    • ≥ 90% successful animation generation
+
+---------------------------------------------------------------------
+
+02. Scope (v1.0):
+
+Included:
+• Text-to-Sign conversion
+• Optional speech-to-text
+• Rule-based ASL grammar transformation
+• Sentence-level emotion classification
+• 3D avatar animation rendering
+• Free-tier deployment
+
+Supported:
+• Simple statements
+• Basic WH-questions
+• Yes/No questions
+• Single time marker
+
+---------------------------------------------------------------------
+
+03. Out of Scope:
+
+• Complex clauses
+• Idioms
+• Multi-language
+• Real-time streaming
+• Emotion intensity scaling
+• Production scaling
+• Certified ASL accuracy
+
+---------------------------------------------------------------------
+
+04. System Constraints:
+
+• Free tools only
+• Model size ≤ 300MB
+• Backend memory ≤ 2GB
+• Fixed gesture duration ~1.5–2 sec
+• Sentence-level emotion only
+• Pre-generated animations only
+
+Vocabulary Target:
+• 100–150 base gestures
+• Lemma-based mapping (go, went → GO)
+
+Unknown Word Policy:
+• Finger-spell if available
+• Else map to UNKNOWN gesture
+• Log for update
+
+---------------------------------------------------------------------
+
+05. Performance Targets:
+
+• API response ≤ 2 sec
+• Render start ≤ 5 sec
+• ≥ 30 FPS playback
+
+---------------------------------------------------------------------
+
+06. Directory Structure (Proposed):
+
+Root/
+│
+├── backend/ # Fully Dockerized Backend
+│ ├── app/
+│ │ ├── main.py # FastAPI entry
+│ │ ├── routes/
+│ │ ├── nlp/
+│ │ │ ├── parser.py
+│ │ │ ├── asl_rules.py
+│ │ │ ├── emotion.py
+│ │ ├── mapping/
+│ │ │ ├── gesture_map.json
+│ │ │ ├── emotion_map.json
+│ │ └── utils/
+│ ├── requirements.txt
+│ ├── Dockerfile
+│ └── .env
+│
+├── frontend/ # React + Three.js
+│ ├── src/
+│ │ ├── components/
+│ │ ├── three/
+│ │ ├── api/
+│ │ └── App.jsx
+│ ├── public/
+│ └── package.json
+│
+├── assets/ # Blender Outputs
+│ ├── avatar/
+│ ├── animations/
+│ │ ├── gestures/
+│ │ └── emotions/
+│
+├── docs/
+│ ├── 01-conceptual.txt
+│ ├── 02-tech-stack.txt
+│ ├── 03-technical-architecture.txt
+│ └── 04-v1-architecture.txt
+│
+└── README.md
+
+---------------------------------------------------------------------
+
+07. CI/CD & Task Distribution:
+
+Branch Strategy:
+• main → stable
+• dev → integration
+• feature/* → individual work
+
+Workflow:
+Feature branch → PR to dev → Review → Merge → Test → Merge to main → Deploy
+
+Task Groups:
+
+A. Backend (Assigned: Backend Developer)
+
+• Text normalization
+• spaCy parsing
+• ASL rule engine
+• Emotion classifier
+• Gesture mapping logic
+• API endpoints
+• Dockerize backend
+
+B. Frontend (Assigned: Frontend Developer)
+
+• React UI
+• Three.js scene setup
+• Avatar loading
+• Animation sequencing
+• Crossfade logic
+• API integration
+• Render deployment
+
+C. Animation (Frontend Dev + Lead Supervision)
+
+• Avatar rig in Blender
+• 100–150 gesture clips
+• 7 emotion clips
+• Export GLB
+• Maintain naming standard
+
+D. Integration (Team + Lead Supervision)
+
+• End-to-end testing
+• Latency validation
+• Unknown word handling validation
+• Deployment decision (Render vs Docker local)
+
+E. Documentation (Lead)
+
+• Maintain architecture files
+• API documentation
+• Demo preparation
+• Weekly progress tracking
+
+---------------------------------------------------------------------
+
+08. Release Criteria:
+
+System considered stable when:
+• Grammar transformation works for controlled test set
+• Gesture IDs correctly map to animations
+• Emotion applied correctly
+• End-to-end demo works without crash
+• Deployment accessible externally

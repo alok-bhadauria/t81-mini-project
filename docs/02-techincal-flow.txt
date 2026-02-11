@@ -1,0 +1,132 @@
+TECHNICAL ARCHITECTURE:
+
+---------------------------------------------------------------------
+
+01. Input Handling:
+
+User enters Text or Speech in React UI
+If Speech → Audio captured → Whisper/Vosk converts to Text
+Clean Text sent to FastAPI endpoint /process-text
+
+---------------------------------------------------------------------
+
+02. Text Normalization:
+
+FastAPI receives raw text
+Python preprocessing module executes:
+• Remove extra symbols
+• Normalize case
+• Expand contractions
+Output: Standardized Text
+
+---------------------------------------------------------------------
+
+03. Linguistic Parsing:
+
+Standardized Text passed to spaCy pipeline.
+spaCy performs:
+• Tokenization
+• POS tagging
+• Dependency parsing
+
+Extracted elements:
+• Subject
+• Verb
+• Object
+• Time markers
+• Question type
+Output: Parsed Linguistic Structure
+
+---------------------------------------------------------------------
+
+04. ASL Grammar Transformation:
+
+Parsed structure sent to Custom ASL Rule Engine.
+Rule Engine applies:
+• Move Time expressions to beginning
+• Remove auxiliary verbs
+• Convert to Subject–Object–Verb order
+• Move WH-word to end
+• Flag Yes/No questions for non-manual signal
+Output: ASL-Structured Token List
+Example: ["TODAY", "I", "HAPPY"]
+
+---------------------------------------------------------------------
+
+05. Gesture Mapping:
+
+ASL Token List checked against in-memory gesture_map.json
+Each token mapped to unique Gesture_ID
+Output: Ordered Gesture Sequence
+Example: [G101, G002, G305]
+
+---------------------------------------------------------------------
+
+06. Emotion Classification:
+
+Original Standardized Text sent to HuggingFace emotion model
+Model classifies sentence-level emotion
+Single Emotion_ID assigned (E0–E6)
+Output: Emotion_ID
+
+---------------------------------------------------------------------
+
+07. Backend Response Packaging:
+
+Combine Gesture Sequence + Emotion_ID
+Structured JSON created
+Response returned via FastAPI
+Example Response:
+{
+"gesture_sequence": ["G101","G002","G305"],
+"emotion_id": "E5"
+}
+
+---------------------------------------------------------------------
+
+08. Animation Path Resolution (Frontend):
+
+React receives response
+Lookup performed in:
+• Hand animation mapping file
+• Emotion animation mapping file
+Gesture_ID → Hand animation path (.glb)
+Emotion_ID → Facial animation path (.glb)
+
+---------------------------------------------------------------------
+
+09. 3D Model Loading:
+
+Three.js initializes WebGL context
+GLTFLoader loads Base Avatar Model once
+Required Gesture animation clips loaded dynamically
+Emotion animation clip loaded
+
+---------------------------------------------------------------------
+
+10. Animation Composition:
+
+AnimationMixer sequences gesture clips
+Crossfade applied between clips for smooth transition
+Emotion animation overlaid globally on facial rig
+Timing synchronized across clips
+
+---------------------------------------------------------------------
+
+11. Rendering Output:
+
+Three.js WebGL renderer renders scene
+Animated avatar displayed in canvas
+Final Output: Structured ASL sequence + Emotion expression
+
+---------------------------------------------------------------------
+
+12. Deployment Flow:
+
+Frontend (React build) deployed on Render
+Backend (FastAPI + NLP models) deployed on Render if resources permit
+If resource-limited:
+• Backend Dockerized
+• Run locally
+• Exposed via Cloudflare Tunnel or ngrok or tailscale
+Frontend API endpoint configured to active backend URL

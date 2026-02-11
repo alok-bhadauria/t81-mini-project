@@ -1,0 +1,126 @@
+CONCEPTUAL FLOW:
+
+---------------------------------------------------------------------
+
+01. Input Handling:
+
+User provides input in text or speech form.
+If speech → audio is converted into text.
+System continues processing only clean textual input.
+
+Example:
+Speech: "I am happy today"
+Converted Text: "I am happy today"
+
+---------------------------------------------------------------------
+
+02. Text Normalization:
+
+Text is standardized to ensure consistent linguistic processing.
+Operations:
+• Remove unnecessary symbols
+• Standardize case
+• Expand contractions
+
+Example:
+"I’m VERY happy today!!!"
+→ "i am very happy today"
+
+---------------------------------------------------------------------
+
+03. Linguistic Analysis:
+
+Sentence is analyzed to extract grammatical components.
+Identified Elements:
+• Subject
+• Verb
+• Object
+• Time markers
+• Question type
+
+Example:
+Sentence: "I am happy today"
+• Subject = I
+• Verb = am (auxiliary) + happy
+• Time marker = today
+• Type = Statement
+
+---------------------------------------------------------------------
+
+04. ASL Grammar Transformation:
+
+English grammatical structure is converted into simplified ASL structure using rule-based reordering.
+Applied Rules:
+• Move Time expressions to beginning
+• Remove auxiliary verbs
+• Convert to Subject–Object–Verb order
+• Move WH-words to end
+• Mark Yes/No questions for non-manual signal
+
+Example 1 (Time Rule):
+"I am happy today"
+→ "TODAY I HAPPY"
+
+Example 2 (WH Rule):
+"Where are you going?"
+→ "YOU GO WHERE"
+
+---------------------------------------------------------------------
+
+05. Gesture Mapping:
+
+Each ASL token is mapped to a predefined sign vocabulary.
+Every word corresponds to a unique Gesture ID.
+
+Example:
+ASL Tokens: "TODAY I HAPPY"
+Mapping:
+• TODAY → G101
+• I → G002
+• HAPPY → G305
+Output:
+[G101, G002, G305]
+
+---------------------------------------------------------------------
+
+06. Emotion Classification:
+
+Entire sentence is classified to determine a single Emotion ID.
+Emotion controls facial expressions and non-manual signals.
+
+Example 1:
+"I am very happy today"
+Emotion = Excited → E5
+
+Example 2:
+"Where are you going?"
+Emotion = Question → E6
+
+---------------------------------------------------------------------
+
+07. Backend Output:
+
+Backend generates structured response data.
+Output Components:
+• Ordered list of Gesture IDs
+• Single Emotion ID
+
+Example Output:
+• Gesture Sequence: [G101, G002, G305]
+• Emotion ID: E5
+
+---------------------------------------------------------------------
+
+08. Frontend Rendering:
+
+Frontend loads base 3D avatar.
+Gesture animations are fetched using Gesture IDs.
+Emotion animation is applied globally.
+Animations are blended smoothly and rendered sequentially.
+
+Example Final Flow:
+Input: "I am happy today"
+ASL Structure: "TODAY I HAPPY"
+Gesture IDs: [G101, G002, G305]
+Emotion: E5
+Output: Avatar signs TODAY → I → HAPPY with excited facial expression.

@@ -1,0 +1,97 @@
+GIT HELP GUIDE FOR TEAM FUSION:
+
+---------------------------------------------------------------------
+
+01. Git Verification (FIRST TIME SETUP):
+
+• Check current configuration:
+git config --global user.name
+git config --global user.email
+
+• Set your details:
+git config --global user.name "Your Name"
+git config --global user.email "your@email.com"
+
+---------------------------------------------------------------------
+
+02. Development Branch Setup (LEAD ONLY - Run Once):
+
+• NOTE: Run this only if dev branch does NOT exist.
+
+• Sync main branch:
+git checkout main
+git pull origin main
+
+• Create dev branch from main:
+git checkout -b dev
+git push -u origin dev
+
+• Repository Structure:
+    • main → Stable branch
+    • dev → Development integration branch
+
+---------------------------------------------------------------------
+
+03. One-Time Repository Branch Setup (ALL TEAM MEMBERS - Run Once):
+
+• NOTE: Do NOT run git init. Clone already initializes Git.
+• NOTE: for branch name, the format will be "Name-Role"
+• Branch Names : "Aditya-Lead", "Alok-Frontend", "Manish-Backend"
+
+• Clone repository:
+git clone https://github.com/alok-bhadauria/t81-mini-project
+cd t81-mini-project
+
+• Create personal branch from dev (NOT main):
+git checkout dev
+git pull origin dev
+git checkout -b "branch-name"
+git push -u origin "branch-name"
+
+---------------------------------------------------------------------
+
+04. Daily Routine Workflow:
+
+• Always sync dev first
+• Switch to your personal branch
+• Merge latest dev into your branch
+• Check, Stage, and Commit changes
+• Push to your branch
+
+git checkout dev
+git pull origin dev
+git checkout "branch-name"
+git merge dev
+git status
+git add .
+git commit -m "<clear commit message>"
+git push origin "branch-name"
+
+• Open Pull Request (PR) on GitHub → Target branch = dev
+• Wait for review and merge into dev
+• Do NOT directly commit to main
+• Do NOT directly commit to dev
+
+---------------------------------------------------------------------
+
+05. Integration & Release Process (LEAD ONLY):
+
+• When dev is stable and ready for demo:
+git checkout main
+git pull origin main
+git merge dev
+git push origin main
+
+---------------------------------------------------------------------
+
+06. Important Team Rules
+
+• Never work directly on main.
+• Never work directly on dev.
+• Always pull dev before starting work.
+• Merge dev into your branch daily.
+• Resolve conflicts immediately.
+• Write clear and meaningful commit messages.
+• Push regularly.
+• Wait for PR merge before assuming code is integrated.
+• Protect main branch in GitHub settings.
