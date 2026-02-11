@@ -55,6 +55,7 @@ git push -u origin "branch-name"
 • Always sync dev first
 • Switch to your personal branch
 • Merge latest dev into your branch
+• Perform all the changes in your branch
 • Check, Stage, and Commit changes
 • Push to your branch
 
