@@ -2,6 +2,16 @@ GIT HELP GUIDE FOR TEAM FUSION:
 
 ---------------------------------------------------------------------
 
+00. Branching & CI/CD Strategy:
+
+• Model: Multi long-lived branches with main, dev, and individual member branches (Name-Role).
+• Workflow: Team members work on personal branches, raise PRs to dev, and Lead merges dev into main for release.
+• main: Stable and demo-ready branch. Protected. Only Lead merges here.
+• dev: Active development and integration branch. All PRs must target dev.
+• Direct commits to main or dev are not allowed.
+
+---------------------------------------------------------------------
+
 01. Git Verification (FIRST TIME SETUP):
 
 • Check current configuration:
