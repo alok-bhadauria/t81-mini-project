@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app.core.input_handler import InputHandler
 from app.core.text_processor import TextProcessor
@@ -6,6 +7,15 @@ from app.core.linguistic_engine import LinguisticEngine
 
 # Initialize the API app.
 app = FastAPI(title="SignFusion API", version="0.1.0")
+
+# Enable CORS so the frontend (running on a different port) can talk to us.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows all origins (for development only).
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods (GET, POST, etc).
+    allow_headers=["*"], # Allows all headers.
+)
 
 # Define what valid input looks like (must have text, is_audio is optional).
 class SignRequest(BaseModel):
