@@ -73,6 +73,7 @@ git checkout dev
 git pull origin dev
 git checkout "branch-name"
 git merge dev
+
 git status
 git add .
 git commit -m "<clear commit message>"
