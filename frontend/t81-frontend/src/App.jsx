@@ -1,34 +1,66 @@
 import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import { processText } from './api/api'
 import './App.css'
 
 function App() {
-  const [count, setCount] = useState(0)
+  // State to hold the user's input and the result from the backend.
+  const [inputText, setInputText] = useState("")
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  // This function runs when the "Translate" button is clicked.
+  const handleTranslate = async () => {
+    if (!inputText) return;
+
+    setLoading(true);
+    try {
+      // Call our API helper to get the translation.
+      const data = await processText(inputText);
+      setResult(data);
+    } catch (error) {
+      alert("Something went wrong!");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
+    <div className="app-container">
+      <h1>SignFusion v1.0</h1>
+
+      {/* Input Section */}
+      <div className="input-section">
+        <textarea
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          placeholder="Type something here (e.g., 'I am happy today')..."
+          rows="4"
+        />
+        <br />
+        <button onClick={handleTranslate} disabled={loading}>
+          {loading ? "Translating..." : "Translate to ASL"}
         </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
       </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+
+      {/* Output Section - Only shows if we have a result */}
+      {result && (
+        <div className="output-section">
+          <h3>Original: {result.original}</h3>
+
+          <div className="result-box">
+            <h4>ASL Gloss Tokens:</h4>
+            <div className="tokens">
+              {result.gloss.map((token, index) => (
+                <span key={index} className="token">{token}</span>
+              ))}
+            </div>
+
+            <h4>Emotion ID:</h4>
+            <p className="emotion">{result.emotion}</p>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
