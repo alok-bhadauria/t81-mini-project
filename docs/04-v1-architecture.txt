@@ -70,47 +70,46 @@ Unknown Word Policy:
 
 ---------------------------------------------------------------------
 
-06. Directory Structure (Proposed):
+06. Directory Structure (Implemented):
 
 Root/
 │
-├── backend/ # Fully Dockerized Backend
+├── backend/ # FastAPI Backend
 │ ├── app/
-│ │ ├── main.py # FastAPI entry
-│ │ ├── routes/
-│ │ ├── nlp/
-│ │ │ ├── parser.py
-│ │ │ ├── asl_rules.py
-│ │ │ ├── emotion.py
-│ │ ├── mapping/
-│ │ │ ├── gesture_map.json
-│ │ │ ├── emotion_map.json
-│ │ └── utils/
+│ │ ├── core/
+│ │ │ ├── input_handler.py
+│ │ │ ├── text_processor.py
+│ │ │ ├── linguistic_engine.py
+│ │ │ └── __init__.py
+│ │ ├── main.py # FastAPI Entry Point
+│ │ └── __init__.py
+│ ├── venv/ # Python Virtual Environment
 │ ├── requirements.txt
-│ ├── Dockerfile
-│ └── .env
+│ ├── test_logic.py
+│ └── .gitignore
 │
-├── frontend/ # React + Three.js
-│ ├── src/
-│ │ ├── components/
-│ │ ├── three/
-│ │ ├── api/
-│ │ └── App.jsx
-│ ├── public/
-│ └── package.json
+├── frontend/ 
+│ └── t81-frontend/ # React + Vite Project
+│     ├── src/
+│     │ ├── api/
+│     │ │ └── api.js
+│     │ ├── App.jsx
+│     │ ├── App.css
+│     │ └── main.jsx
+│     ├── public/
+│     ├── package.json
+│     └── vite.config.js
 │
-├── assets/ # Blender Outputs
-│ ├── avatar/
-│ ├── animations/
-│ │ ├── gestures/
-│ │ └── emotions/
+├── assets/ # Blender Outputs (Placeholder)
+│ └── .gitkeep
 │
 ├── docs/
-│ ├── 01-conceptual.txt
-│ ├── 02-tech-stack.txt
-│ ├── 03-technical-architecture.txt
+│ ├── 01-conceptual-flow.txt
+│ ├── 02-techincal-flow.txt
+│ ├── 03-tech-stack.txt
 │ └── 04-v1-architecture.txt
 │
+├── .gitignore
 └── README.md
 
 ---------------------------------------------------------------------
@@ -179,3 +178,34 @@ System considered stable when:
 • Emotion applied correctly
 • End-to-end demo works without crash
 • Deployment accessible externally
+
+---------------------------------------------------------------------
+
+09. How to Run (Development Mode):
+
+Prerequisites:
+• Node.js & npm installed
+• Python 3.10+ installed
+
+A. Backend
+• Navigate to backend:
+• Activate Virtual Environment:
+• Install Dependencies (if new):
+• Start Server:
+
+cd backend
+.\venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+> Expected Result : "Uvicorn running on http://0.0.0.0:8000"
+
+B. Frontend:
+• Open a NEW terminal
+• Navigate to frontend:
+• Install Dependencies (if new)
+• Start Server
+
+cd frontend/t81-frontend
+npm install
+npm run dev
+> Expected Result : "Local: http://localhost:5173/"
