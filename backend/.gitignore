@@ -1,4 +1,21 @@
-__pycache__/
-venv/
+# Environments
 .env
-*.pyc
+.venv
+env/
+venv/
+ENV/
+t81-backend/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Logs
+*.log

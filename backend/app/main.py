@@ -1,63 +1,58 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+from app.db.mongodb import connect_to_mongo, close_mongo_connection, get_database
+from app.api.routes import text, auth, history, uploads
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from app.core.input_handler import InputHandler
-from app.core.text_processor import TextProcessor
-from app.core.linguistic_engine import LinguisticEngine
 
-# Initialize the API app.
-app = FastAPI(title="SignFusion API", version="0.1.0")
+limiter = Limiter(key_func=get_remote_address)
 
-# Enable CORS so the frontend (running on a different port) can talk to us.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # Allows all origins (for development only).
-    allow_credentials=True,
-    allow_methods=["*"], # Allows all methods (GET, POST, etc).
-    allow_headers=["*"], # Allows all headers.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_to_mongo()
+    db = get_database()
+
+    await db["users"].create_index("email", unique=True)
+    yield
+    await close_mongo_connection()
+
+app = FastAPI(
+    title="SignFusion Backend API",
+    description="Scalable backend for handling multimodal Sign Language translation requests.",
+    version="1.0.0",
+    lifespan=lifespan
 )
 
-# Define what valid input looks like (must have text, is_audio is optional).
-class SignRequest(BaseModel):
-    text: str
-    is_audio: bool = False
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
-# Define what our response will look like (so frontend knows what to expect).
-class SignResponse(BaseModel):
-    original: str
-    gloss: list[str]
-    emotion: str
+@app.middleware("http")
+async def secure_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(text.router)
+app.include_router(auth.router)
+app.include_router(history.router)
+app.include_router(uploads.router)
 
 @app.get("/")
-def read_root():
-    # Simple check to see if server is online.
-    return {"message": "SignFusion API is running."}
-
-@app.post("/process", response_model=SignResponse)
-def process_content(request: SignRequest):
-    # This is the main function that runs the whole pipeline.
-    try:
-        # Step 1: Handle the raw input (convert audio if needed).
-        raw_text = InputHandler.process_input(request.text, request.is_audio)
-        
-        # Step 2: Clean and normalize the text.
-        normalized_text = TextProcessor.normalize_text(raw_text)
-        
-        # Step 3: Run linguistic analysis to get gestures and emotion.
-        result = LinguisticEngine.process_sentence(normalized_text)
-        
-        # Return the structured result to the frontend.
-        return SignResponse(
-            original=raw_text,
-            gloss=result["asl_tokens"],
-            emotion=result["emotion_id"]
-        )
-        
-    except Exception as e:
-        # If something goes wrong, tell the user what happened.
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    # Run the server on port 8000.
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+@limiter.limit("10/minute")
+async def root(request: Request):
+    return {"message": "SignFusion API is running gracefully."}
