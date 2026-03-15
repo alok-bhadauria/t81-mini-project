@@ -20,7 +20,7 @@ export function History() {
         if (!isLoggedIn) return;
         const fetchHistory = async () => {
             try {
-                const response = await fetch("http://127.0.0.1:8000/api/v1/history", {
+                const response = await fetch(`${import.meta.env.VITE_API_URL}/history`, {
                     headers: { "Authorization": `Bearer ${jwt}` }
                 });
                 if (!response.ok) throw new Error("Failed to fetch history");
@@ -44,7 +44,7 @@ export function History() {
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`http://127.0.0.1:8000/api/v1/history/${id}`, {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/history/${id}`, {
                 method: "DELETE",
                 headers: {
                     "Authorization": `Bearer ${jwt}`

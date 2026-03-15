@@ -3,10 +3,11 @@ import { cn } from "../../utils/cn";
 import { Loader2 } from "lucide-react";
 
 const buttoniv = {
-    base: "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background",
+    base: "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background cursor-pointer",
     variants: {
         default: "bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]",
         secondary: "bg-[var(--bg-surface)] text-[var(--text-primary)] border border-[var(--border-color)] hover:bg-[var(--bg-background)]",
+        outline: "border border-[var(--border-color)] bg-transparent hover:bg-[var(--bg-surface)] text-[var(--text-primary)]",
         ghost: "hover:bg-[var(--bg-surface)] hover:text-[var(--text-primary)]",
         link: "text-[var(--primary)] underline-offset-4 hover:underline",
         danger: "bg-red-500 text-white hover:bg-red-600",

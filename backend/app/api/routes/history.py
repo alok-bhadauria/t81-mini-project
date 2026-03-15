@@ -3,7 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.api.dependencies import get_db, get_current_user
 from app.models.user import UserDBModel
-from app.models.translation import PyObjectId
+from app.models.task import PyObjectId
+
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -22,7 +23,7 @@ async def get_history(
         {"$sort": {"created_at": -1}},
         {"$limit": 50}
     ]
-    cursor = db["translations"].aggregate(pipeline)
+    cursor = db["tasks"].aggregate(pipeline)
     items = await cursor.to_list(length=50)
     
     results = []
@@ -43,7 +44,7 @@ async def delete_history_item(
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-    result = await db["translations"].delete_one({"_id": PyObjectId(history_id), "user_id": str(current_user.id)})
+    result = await db["tasks"].delete_one({"_id": PyObjectId(history_id), "user_id": str(current_user.id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="History not found or unauthorized")
         

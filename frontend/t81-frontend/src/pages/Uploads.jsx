@@ -21,7 +21,7 @@ export function Uploads() {
         if (!isLoggedIn) return;
         const fetchUploads = async () => {
             try {
-                const response = await fetch("http://127.0.0.1:8000/api/v1/uploads", {
+                const response = await fetch(`${import.meta.env.VITE_API_URL}/uploads`, {
                     headers: { "Authorization": `Bearer ${jwt}` }
                 });
                 if (!response.ok) throw new Error("Failed to fetch uploads");
@@ -45,7 +45,7 @@ export function Uploads() {
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`http://127.0.0.1:8000/api/v1/uploads/${id}`, {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/uploads/${id}`, {
                 method: "DELETE",
                 headers: {
                     "Authorization": `Bearer ${jwt}`
@@ -67,12 +67,17 @@ export function Uploads() {
                     <h2 className="text-3xl font-bold text-[var(--text-primary)]">Uploads</h2>
                     <p className="text-[var(--text-secondary)]">Manage your saved documents.</p>
                 </div>
-                {isLoggedIn && (
+                {isLoggedIn && !isLoading && (
                     <div className="text-right">
                         <div className="text-sm font-semibold text-[var(--text-primary)]">Storage Usage</div>
-                        <div className="text-xs text-[var(--text-secondary)]">3 / 5 Free Uploads</div>
+                        <div className="text-xs text-[var(--text-secondary)]">
+                            {uploadList.length} / 5 Free Uploads
+                        </div>
                         <div className="w-32 h-2 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-1 overflow-hidden">
-                            <div className="h-full bg-[var(--primary)] w-[60%] rounded-full"></div>
+                            <div 
+                                className={`h-full rounded-full transition-all duration-500 ${uploadList.length >= 5 ? 'bg-red-500' : 'bg-[var(--primary)]'}`} 
+                                style={{ width: `${Math.min((uploadList.length / 5) * 100, 100)}%` }}
+                            ></div>
                         </div>
                     </div>
                 )}

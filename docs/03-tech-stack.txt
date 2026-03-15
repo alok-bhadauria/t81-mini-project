@@ -7,7 +7,6 @@ TECH STACK:
 Python: Core backend language.
 FastAPI: Lightweight, high-performance REST API framework.
 Uvicorn: ASGI server for running FastAPI.
-Docker: Containerizes backend for portability and easy deployment.
 
 ---------------------------------------------------------------------
 
@@ -52,5 +51,3 @@ AnimationMixer (Three.js): Controls animation playback and blending.
 07. Deployment:
 
 Render (Free tier): Host frontend and optionally backend.
-If backend not stable on free tier → Docker container hosted locally.
-Local hosting exposed via: Cloudflare Tunnel (free), ngrok (free tier)

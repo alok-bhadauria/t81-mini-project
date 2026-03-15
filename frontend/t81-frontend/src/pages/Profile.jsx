@@ -19,6 +19,8 @@ export function Profile() {
     const [isSaving, setIsSaving] = useState(false);
     const [isChangingPassword, setIsChangingPassword] = useState(false);
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+    
+    const [stats, setStats] = useState({ translations: 0, saved_items: 0, plan: "free", isLoading: true });
     const [editForm, setEditForm] = useState({
         full_name: user?.full_name || "",
         username: user?.username || "",
@@ -51,6 +53,25 @@ export function Profile() {
     }, [user]);
 
     useEffect(() => {
+        if (!isLoggedIn || !jwt) return;
+        const fetchStats = async () => {
+            try {
+                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/stats`, {
+                    headers: { "Authorization": `Bearer ${jwt}` }
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    setStats({ ...data, isLoading: false });
+                }
+            } catch (error) {
+                console.error("Failed to load stats", error);
+                setStats(prev => ({ ...prev, isLoading: false }));
+            }
+        };
+        fetchStats();
+    }, [isLoggedIn, jwt]);
+
+    useEffect(() => {
         if (!isEditing) return;
 
         if (!editForm.username || editForm.username.length < 5 || editForm.username.length > 20) {
@@ -68,7 +89,7 @@ export function Profile() {
         const checkAvailability = async () => {
             setIsCheckingUsername(true);
             try {
-                const response = await fetch(`http://127.0.0.1:8000/api/v1/auth/check-username?username=${editForm.username}`);
+                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/check-username?username=${editForm.username}`);
                 if (response.ok) {
                     const data = await response.json();
                     setUsernameAvailable(data.available);
@@ -103,7 +124,7 @@ export function Profile() {
         formData.append("file", file);
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/api/v1/auth/me/avatar", {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/avatar`, {
                 method: "POST",
                 headers: {
                     "Authorization": `Bearer ${jwt}`
@@ -112,8 +133,14 @@ export function Profile() {
             });
 
             if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.detail || "Failed to upload avatar");
+                let errorMsg = "Failed to upload avatar";
+                try {
+                    const errData = await response.json();
+                    if (errData.detail) errorMsg = typeof errData.detail === 'string' ? errData.detail : errData.detail[0].msg;
+                } catch (e) {
+                    errorMsg = "Network error. The file might be too large.";
+                }
+                throw new Error(errorMsg);
             }
 
             const updatedData = await response.json();
@@ -131,7 +158,7 @@ export function Profile() {
     const handleRemoveAvatar = async () => {
         setIsUploadingAvatar(true);
         try {
-            const response = await fetch("http://127.0.0.1:8000/api/v1/auth/me", {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
                 method: "PUT",
                 headers: {
                     "Content-Type": "application/json",
@@ -166,7 +193,7 @@ export function Profile() {
                 }
 
                 setIsChangingPassword(true);
-                const pwdResponse = await fetch("http://127.0.0.1:8000/api/v1/auth/password", {
+                const pwdResponse = await fetch(`${import.meta.env.VITE_API_URL}/auth/password`, {
                     method: "PUT",
                     headers: {
                         "Content-Type": "application/json",
@@ -187,7 +214,7 @@ export function Profile() {
                 }
             }
 
-            const response = await fetch("http://127.0.0.1:8000/api/v1/auth/me", {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
                 method: "PUT",
                 headers: {
                     "Content-Type": "application/json",
@@ -484,18 +511,33 @@ export function Profile() {
                 </div>
             </Card>
 
-            <div className="grid gap-6 md:grid-cols-3">
-                <Card className="p-6 text-center space-y-2">
+            <div className="grid gap-6 md:grid-cols-3 animate-in fade-in duration-500 delay-100">
+                <Card className="p-6 text-center space-y-2 relative overflow-hidden group">
+                    <div className="absolute inset-0 bg-gradient-to-br from-[var(--primary)]/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     <h4 className="text-[var(--text-secondary)] font-medium">Translations</h4>
-                    <p className="text-4xl font-bold text-[var(--primary)]">12</p>
+                    {stats.isLoading ? (
+                        <div className="flex justify-center pt-2"><Loader2 size={24} className="animate-spin text-[var(--primary)] opacity-50" /></div>
+                    ) : (
+                        <p className="text-4xl font-bold text-[var(--primary)]">{stats.translations}</p>
+                    )}
                 </Card>
-                <Card className="p-6 text-center space-y-2">
+                <Card className="p-6 text-center space-y-2 relative overflow-hidden group">
+                    <div className="absolute inset-0 bg-gradient-to-br from-[var(--primary)]/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     <h4 className="text-[var(--text-secondary)] font-medium">Saved Items</h4>
-                    <p className="text-4xl font-bold text-[var(--primary)]">4</p>
+                    {stats.isLoading ? (
+                        <div className="flex justify-center pt-2"><Loader2 size={24} className="animate-spin text-[var(--primary)] opacity-50" /></div>
+                    ) : (
+                        <p className="text-4xl font-bold text-[var(--primary)]">{stats.saved_items}</p>
+                    )}
                 </Card>
-                <Card className="p-6 text-center space-y-2">
+                <Card className="p-6 text-center space-y-2 relative overflow-hidden group border-t-2 border-t-green-500/50">
+                    <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     <h4 className="text-[var(--text-secondary)] font-medium">Current Plan</h4>
-                    <p className="text-2xl font-bold text-green-500 pt-1">Free</p>
+                    {stats.isLoading ? (
+                        <div className="flex justify-center pt-2"><Loader2 size={24} className="animate-spin text-green-500 opacity-50" /></div>
+                    ) : (
+                        <p className="text-2xl font-bold text-green-500 pt-1 capitalize">{user.plan || stats.plan || "Free"}</p>
+                    )}
                 </Card>
             </div>
         </div>

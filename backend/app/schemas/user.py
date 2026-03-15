@@ -34,6 +34,7 @@ class UserResponse(BaseModel):
     phone_number: str | None = None
     profile_picture_url: str | None = None
     auth_provider: str
+    plan: str
     created_at: datetime
 
 class UserUpdateRequest(BaseModel):

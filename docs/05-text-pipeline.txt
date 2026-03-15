@@ -1,0 +1,61 @@
+05-TEXT-PIPELINE
+
+---------------------------------------------------------------------
+
+01. Overview
+
+This document outlines the step-by-step journey of a sentence from the moment a user types it in the browser until it is stored in the database as an animated sequence. The pipeline leverages advanced Natural Language Processing (NLP) modules to capture, clean, analyze, and translate English inputs directly into structured 3D animation maps for the frontend rendering engine.
+
+---------------------------------------------------------------------
+
+02. Phase 1: Input Capture (Frontend)
+
+The translation sequence always begins in the React ui (`Translate.jsx`). The user interacts with the system using one of three distinct methods: text input, speech input, or document upload. 
+
+Once the data is generated, all three modes funnel down into a standard text string. When the user clicks "Translate", the React application dispatches this single, unified text string securely over a POST request to the backend API (`http://127.0.0.1:8000/api/v1/text`), along with their JWT authentication token.
+
+---------------------------------------------------------------------
+
+03. Phase 2: Route Management (Backend)
+
+The initial contact on the backend occurs within `app/api/routes/text.py`. 
+
+This API route interceptor is heavily fortified:
+1. Rate Limiting: It applies a strict `slowapi` cap, ensuring absolute server stability by rejecting abusive traffic loops.
+2. User Identification: It cracks open the JWT token attached to the request, extracting the `user_id` so the system knows exactly whose profile should save the resulting translation.
+
+Finally, the interceptor hands the raw text phrase directly over to the core `process_raw_text` coordinator function to begin the AI sequence.
+
+---------------------------------------------------------------------
+
+04. Phase 3: The NLP Translation Engine
+
+The natural language processing sequence occurs across two massive backend services (`step2_text_processing.py` & `step3_asl_translation.py`). 
+
+Step A: Semantic Purification
+First, the text is fed through an aggressive, custom-built Iterative Regex Spellchecker. Built directly on top of `PySpellChecker`, this logic loop mathematically hunts down extreme typographical errors (e.g. converting "proceesingggg" down to "processing") without destroying explicit numbers or capitalized acronyms (e.g. "HIS").
+
+Step B: NLP Feature Extraction
+The purified text is then pushed into NLTK VADER and SpaCy models:
+* Sentiment Analysis: VADER calculates an emotional baseline (e.g. HAPPY or SAD) to dictate the Avatar's facial expressions.
+* Part of Speech: SpaCy analyzes the grammatical structure, deleting useless structural weight like auxiliary verbs or prepositions while reducing primary verbs to their root forms (e.g. "Running" -> "Run").
+
+Step C: ASL Reordering
+Finally, the pipeline syntactically rebuilds the remaining tokens to mimic true ASL grammar patterns (Time -> Topic/Comment -> Negation -> Question). Time-relative concepts are reorganized to the beginning of the sentence string, while adjectives are pushed immediately after the nouns they describe. 
+
+---------------------------------------------------------------------
+
+05. Phase 4: Animation Mapping
+
+The text sequence has now been translated into ASL. Before storage, it must be bound to actual 3D animation addresses within `step3b_animation_mapper.py`.
+
+The Sentiment Map tracks the Avatar's emotion string, binding it to a static `saXXX` body animation index (e.g., HAPPY -> sa001). 
+The Gesture Map simultaneously loops over the array of ASL tokens, pulling specific `gaXXX` hand tracking animations for each word. If it encounters a word that isn't native to the dictionary map, it seamlessly explodes the word into a dynamic fallback array and maps out the exact sequence necessary to fingerspell the word letter by letter (`gaLET_X`). 
+
+---------------------------------------------------------------------
+
+06. Phase 5: Result Storage
+
+The final coordinator creates a unique processing task identifier. It sweeps up the original raw text, the finalized ASL Output string, the emotional variables, and the nested `animation_sequence` dictionary tree, and pushes the entire payload into a `TaskDBModel`. 
+
+This complex metadata object is finally committed securely to the MongoDB cluster so it can be retrieved from the user's history at any point in the future. The frontend is sent a 200 OK signal returning the exact data it needs to immediately kick off the dynamic WebGL sequence.

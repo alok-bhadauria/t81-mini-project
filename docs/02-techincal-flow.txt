@@ -124,9 +124,5 @@ Final Output: Structured ASL sequence + Emotion expression
 12. Deployment Flow:
 
 Frontend (React build) deployed on Render
-Backend (FastAPI + NLP models) deployed on Render if resources permit
-If resource-limited:
-• Backend Dockerized
-• Run locally
-• Exposed via Cloudflare Tunnel or ngrok or tailscale
+Backend (FastAPI + NLP models) deployed on Render
 Frontend API endpoint configured to active backend URL

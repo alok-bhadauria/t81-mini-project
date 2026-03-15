@@ -12,7 +12,7 @@ class PyObjectId(ObjectId):
             core_schema.str_schema(),
         ])
 
-class TranslationDBModel(BaseModel):
+class TaskDBModel(BaseModel):
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
     user_id: str 
     task_id: str
@@ -23,6 +23,9 @@ class TranslationDBModel(BaseModel):
     asl_grammar_output: Optional[str] = None
     gesture_sequence: Optional[list] = None
     emotion_id: Optional[str] = None
+    sentiment_animation_id: Optional[str] = None
+    gesture_animation_ids: Optional[list] = None
+    animation_sequence: Optional[list] = None
     file_metadata: Optional[dict] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

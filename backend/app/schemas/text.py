@@ -10,3 +10,6 @@ class TextInputResponse(BaseModel):
     message: str
     processed_text: str
     asl_grammar_output: str
+    sentiment_animation_id: str
+    gesture_animation_ids: list[str]
+    animation_sequence: list[dict]

@@ -1,0 +1,120 @@
+06-ANIMATION-HELPER
+
+---------------------------------------------------------------------
+
+01. Overview
+
+This document serves as the master blueprint for the 3D Animation mapping pipeline.
+Animators must create Blender animations (.glb) and name them exactly according to the IDs listed below.
+The backend pipeline (step3b_animation_mapper.py) relies natively on these IDs to trigger the Three.js avatar.
+
+---------------------------------------------------------------------
+
+02. Sentiment Animations (saXXX)
+These animations apply natively to the face and torso to convey the emotional tone of the sentence.
+They loop underneath the hand gestures.
+
+ID      | Emotion Trigger    | Description
+sa001   | HAPPY              | Smiling, relaxed shoulders, open body language
+sa002   | SAD                | Frowning, slumped shoulders, downcast eyes
+sa003   | NEUTRAL            | Rest pose, neutral expression, subtle idle breathing
+sa004   | ANGRY              | Furrowed brows, tense shoulders, sharp movements
+sa005   | SURPRISED          | Raised eyebrows, wide eyes, recoil
+sa006   | FEAR               | Tense posture, widened eyes, guarded hands
+sa007   | DISGUST            | Wrinkled nose, retracted head, scowling
+sa008   | EXCITED            | Wide smile, rapid eye movement, energetic
+sa009   | BORED              | Drooping eyelids, shifting weight, sighing posture
+sa010   | CONFUSED           | Squinting, head tilt, asymmetrical brow
+
+---------------------------------------------------------------------
+
+03. Core Gesture Animations (gaXXX)
+These animations apply exclusively to the hands and arms (wrist to fingers). 
+The backend groups lemma tokens directly into these IDs.
+
+Time Markers (Moved to beginning of sentence):
+ga045   | YESTERDAY
+ga046   | TODAY
+ga047   | TOMORROW
+ga048   | NOW
+ga049   | LATER
+ga050   | MORNING
+ga051   | AFTERNOON
+ga052   | EVENING
+ga053   | NIGHT
+ga054   | SOON
+
+WH-Questions (Moved to end of sentence):
+ga101   | WHO
+ga102   | WHAT
+ga103   | WHERE
+ga104   | WHEN
+ga105   | WHY
+ga106   | HOW
+ga107   | WHICH
+
+Negations (Moved to end of sentence, before WH):
+ga201   | NOT
+ga202   | NO
+ga203   | NEVER
+ga204   | NONE
+ga205   | NOTHING
+
+Common Vocabulary (Lemmatized verbs/nouns):
+ga301   | RUN
+ga302   | WALK
+ga303   | EAT
+ga304   | DRINK
+ga305   | SLEEP
+ga306   | WORK
+ga307   | PLAY
+ga308   | HELP
+ga309   | FAST
+ga310   | SLOW
+ga311   | GOOD
+ga312   | BAD
+ga313   | BEAUTIFUL
+ga314   | UGLY
+ga315   | HAPPY
+ga316   | SAD
+
+Pronouns:
+ga401   | I
+ga402   | YOU
+ga403   | HE
+ga404   | SHE
+ga405   | WE
+ga406   | THEY
+
+---------------------------------------------------------------------
+
+04. Finger Spelling Fallback (gaLET_X)
+When the pipeline encounters an unknown word, it breaks it down into individual letters.
+Animators must provide these 26 static hand poses for the dynamic fallback spell-out logic.
+
+gaLET_A | Letter A
+gaLET_B | Letter B
+gaLET_C | Letter C
+gaLET_D | Letter D
+gaLET_E | Letter E
+gaLET_F | Letter F
+gaLET_G | Letter G
+gaLET_H | Letter H
+gaLET_I | Letter I
+gaLET_J | Letter J (animated swoop)
+gaLET_K | Letter K
+gaLET_L | Letter L
+gaLET_M | Letter M
+gaLET_N | Letter N
+gaLET_O | Letter O
+gaLET_P | Letter P
+gaLET_Q | Letter Q
+gaLET_R | Letter R
+gaLET_S | Letter S
+gaLET_T | Letter T
+gaLET_U | Letter U
+gaLET_V | Letter V
+gaLET_W | Letter W
+gaLET_X | Letter X
+gaLET_Y | Letter Y
+gaLET_Z | Letter Z (animated zip)

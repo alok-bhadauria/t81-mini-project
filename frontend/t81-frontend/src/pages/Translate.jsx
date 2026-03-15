@@ -24,6 +24,11 @@ export function Translate() {
 
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
+    const [animationSequence, setAnimationSequence] = useState([]);
+    const [sentimentId, setSentimentId] = useState("");
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentWordIndex, setCurrentWordIndex] = useState(-1);
+
     const toggleListening = () => {
         if (isListening) {
             window.speechRec?.stop();
@@ -83,7 +88,7 @@ export function Translate() {
         const filename = selectedFile && activeTab === 'document' ? selectedFile.name : null;
 
         try {
-            const response = await fetch("http://127.0.0.1:8000/api/v1/text", {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/text`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -105,6 +110,11 @@ export function Translate() {
 
             setOutputText(data.processed_text || inputText);
             setOutputAsl(data.asl_grammar_output || "NO_ASL_DATA");
+            setAnimationSequence(data.animation_sequence || []);
+            setSentimentId(data.sentiment_animation_id || "sa003");
+            setCurrentWordIndex(-1);
+            setIsPlaying(false);
+            
             addToast({ title: "Translation successful", type: "success" });
 
         } catch (error) {
@@ -112,6 +122,23 @@ export function Translate() {
         } finally {
             setIsTranslating(false);
         }
+    };
+    
+    const playAnimationSync = async () => {
+        if (animationSequence.length === 0 || isPlaying) return;
+        setIsPlaying(true);
+        setCurrentWordIndex(0);
+        
+        for (let i = 0; i < animationSequence.length; i++) {
+            setCurrentWordIndex(i);
+            const item = animationSequence[i];
+            
+            const playbackDuration = item.gesture_ids.length * 1000;
+            await new Promise(resolve => setTimeout(resolve, Math.max(800, playbackDuration)));
+        }
+        
+        setCurrentWordIndex(-1);
+        setIsPlaying(false);
     };
 
     const TABS = [
@@ -132,9 +159,7 @@ export function Translate() {
 
     return (
         <div className="max-w-7xl mx-auto h-[calc(100vh-8rem)] flex flex-col md:flex-row gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {}
             <Card className="flex-1 shrink-0 flex flex-col shadow-xl overflow-hidden border-[var(--border-color)]">
-                {}
                 <div className="flex border-b border-[var(--border-color)] p-2 gap-2 bg-[var(--bg-surface)] overflow-x-auto">
                     {TABS.map((tab) => {
                         const Icon = tab.icon;
@@ -155,13 +180,11 @@ export function Translate() {
                     })}
                 </div>
 
-                {}
                 <div className="flex-1 bg-[var(--bg-background)] relative overflow-hidden">
                     <div
                         className="absolute inset-0 flex transition-transform duration-500 ease-in-out"
                         style={{ transform: `translateX(-${['text', 'speech', 'document'].indexOf(activeTab) * 100}%)` }}
                     >
-                        {}
                         <div className="w-full h-full flex-shrink-0 flex flex-col p-4 md:p-6">
                             <div className="relative flex-1 w-full">
                                 <textarea
@@ -213,7 +236,6 @@ export function Translate() {
                             </div>
                         </div>
 
-                        {}
                         <div className="w-full h-full flex-shrink-0 flex flex-col p-4 md:p-6 overflow-y-auto">
                             <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
                                 <div
@@ -240,7 +262,6 @@ export function Translate() {
                             </div>
                         </div>
 
-                        {}
                         <div className="w-full h-full flex-shrink-0 flex flex-col p-4 md:p-6 items-center justify-center text-center">
                             <input
                                 type="file"
@@ -282,14 +303,29 @@ export function Translate() {
                 </div>
             </Card>
 
-            {}
             <Card className="flex-1 flex flex-col shadow-xl overflow-hidden border-[var(--border-color)] bg-[var(--bg-surface)]">
-                {}
                 <div className="flex-[2] bg-orange-50 dark:bg-zinc-900 relative group overflow-hidden flex items-center justify-center transition-colors">
-                    {}
                     <div className="text-zinc-500 dark:text-zinc-600 flex flex-col items-center">
                         <User size={64} className="mb-4" />
-                        <p className="text-xl font-mono opacity-50">3D Avatar Core Offline</p>
+                        <p className="text-xl font-mono opacity-50">{isPlaying ? "Avatar Sync Active" : "3D Avatar Core Offline"}</p>
+                        
+                        {isPlaying && currentWordIndex >= 0 && animationSequence[currentWordIndex] && (
+                            <div className="mt-4 flex flex-col items-center animate-in fade-in zoom-in duration-300">
+                                <span className="text-sm font-bold text-[var(--primary)]">Rendering 3D Gestures & Sentiments:</span>
+                                <div className="flex gap-2 mt-2 flex-wrap justify-center max-w-[80%]">
+                                    {sentimentId && (
+                                        <span className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400 font-mono rounded-md shadow-sm text-sm">
+                                            {sentimentId}
+                                        </span>
+                                    )}
+                                    {animationSequence[currentWordIndex].gesture_ids.map((gid, i) => (
+                                        <span key={i} className="px-3 py-1.5 bg-[var(--primary)]/10 border border-[var(--primary)]/30 text-[var(--primary)] font-mono rounded-md shadow-sm text-sm">
+                                            {gid}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <div className="absolute top-4 right-4 flex gap-2">
@@ -301,37 +337,68 @@ export function Translate() {
                         </Button>
                     </div>
 
-                    {}
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-black/50 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="text-white hover:text-[var(--primary)] transition-colors"><Square size={18} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => {setIsPlaying(false); setCurrentWordIndex(-1);}}><Square size={18} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
-                        <button className="text-white hover:text-[var(--primary)] transition-colors scale-125"><Play size={24} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors scale-125" onClick={playAnimationSync}><Play size={24} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
-                        <div className="w-32 h-1 bg-white/20 rounded-full cursor-pointer">
-                            <div className="w-1/3 h-full bg-[var(--primary)] rounded-full relative">
-                                <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-3 h-3 bg-white rounded-full shadow-md"></div>
+                        <div className="w-32 h-1 bg-white/20 rounded-full cursor-pointer overflow-hidden">
+                            <div 
+                                className="h-full bg-[var(--primary)] transition-all duration-300 relative"
+                                style={{ width: `${animationSequence.length > 0 && currentWordIndex >= 0 ? ((currentWordIndex + 1) / animationSequence.length) * 100 : 0}%` }}
+                            >
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {}
-                <div className="flex-1 p-6 border-t border-[var(--border-color)] bg-[var(--bg-surface)] overflow-y-auto">
-                    <div className="flex items-center justify-between mb-4">
+                <div className="flex-1 p-6 border-t border-[var(--border-color)] bg-[var(--bg-surface)] flex flex-col overflow-hidden">
+                    <div className="flex items-center justify-between mb-4 shrink-0">
                         <h3 className="font-bold text-lg text-[var(--text-primary)]">ASL Grammar Structure</h3>
-                        <span className="text-xs px-2 py-1 rounded bg-[var(--primary)]/10 text-[var(--primary)] font-bold uppercase tracking-wider">Output</span>
+                        <span className="text-xs px-2 py-1 rounded bg-[var(--primary)]/10 text-[var(--primary)] font-bold uppercase tracking-wider">
+                            Synced Output
+                        </span>
                     </div>
-                    {outputAsl ? (
-                        <div className="space-y-4">
-                            <div className="p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner">
-                                <p className="font-mono text-[var(--primary)] text-lg leading-relaxed">{outputAsl}</p>
+                    
+                    {animationSequence.length > 0 ? (
+                        <div className="flex flex-col h-full space-y-4">
+                            <div className="flex-1 p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner relative flex items-center justify-center overflow-x-hidden min-h-[140px]">
+                                
+                                <div className="flex gap-6 items-center flex-nowrap w-full overflow-hidden justify-center relative px-8 mask-edges">
+                                    {animationSequence.map((item, index) => {
+                                        const isCurrent = currentWordIndex === index;
+                                        const distance = Math.abs(currentWordIndex === -1 ? 0 : currentWordIndex - index);
+                                        
+                                        if (currentWordIndex !== -1 && distance > 5) return null;
+                                        
+                                        return (
+                                            <span 
+                                                key={index} 
+                                                className={`font-mono transition-all duration-300 select-none ${
+                                                    isCurrent 
+                                                        ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10" 
+                                                        : currentWordIndex === -1
+                                                            ? "text-[var(--text-secondary)] text-lg"
+                                                            : `text-[var(--text-secondary)] font-medium ${distance > 2 ? 'opacity-20 text-sm' : 'opacity-60 text-lg'} blur-[0.5px]`
+                                                }`}
+                                            >
+                                                {item.word}
+                                            </span>
+                                        );
+                                    })}
+                                </div>
+                                
                             </div>
-                            <div className="text-sm text-[var(--text-secondary)] flex flex-wrap gap-2">
-                                <span className="font-bold">Original:</span> {outputText}
+                            
+                            <div className="flex items-center justify-end shrink-0 w-full mt-4">
+                                <Button size="sm" onClick={playAnimationSync} disabled={isPlaying} className="rounded-full shadow-lg shrink-0">
+                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2"/> : <Play fill="currentColor" size={14} className="mr-2"/>}
+                                    {isPlaying ? "Playing..." : "Play Sync"}
+                                </Button>
                             </div>
                         </div>
                     ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-[var(--text-secondary)] opacity-50 py-8">
+                        <div className="h-full flex flex-col items-center justify-center text-[var(--text-secondary)] opacity-50">
                             <kbd className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] shadow-sm text-sm font-mono mt-2">No active translation</kbd>
                         </div>
                     )}

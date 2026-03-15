@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import uuid
 from fastapi.security import OAuth2PasswordRequestForm
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from bson import ObjectId
 
 from app.api.dependencies import get_db, get_current_user
 from app.core.security import get_password_hash, verify_password, create_access_token
@@ -12,7 +11,6 @@ from app.schemas.user import UserCreateRequest, UserResponse, GoogleAuthRequest,
 from fastapi import Request, UploadFile, File
 import cloudinary
 import cloudinary.uploader
-import os
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 import httpx
@@ -52,7 +50,8 @@ async def register_user(
         username=username,
         hashed_password=hashed_pwd,
         auth_provider="LOCAL",
-        full_name=payload.full_name
+        full_name=payload.full_name,
+        plan="free"
     )
     
     result = await db["users"].insert_one(
@@ -67,6 +66,7 @@ async def register_user(
         username=new_user.username,
         full_name=new_user.full_name,
         auth_provider=new_user.auth_provider,
+        plan=new_user.plan,
         created_at=new_user.created_at
     )
 
@@ -163,7 +163,8 @@ async def google_auth(
             username=username,
             auth_provider="GOOGLE",
             google_id=google_id,
-            full_name=name
+            full_name=name,
+            plan="free"
         )
         result = await db["users"].insert_one(new_user.model_dump(by_alias=True, exclude=["id"]))
         user_id = str(result.inserted_id)
@@ -189,8 +190,24 @@ async def get_my_profile(
         phone_number=current_user.phone_number,
         profile_picture_url=current_user.profile_picture_url,
         auth_provider=current_user.auth_provider,
+        plan=current_user.plan,
         created_at=current_user.created_at
     )
+
+@router.get("/me/stats")
+@limiter.limit("30/minute")
+async def get_my_stats(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    translations_count = await db["tasks"].count_documents({"user_id": current_user.user_id})
+    saved_items_count = await db["uploads"].count_documents({"user_id": current_user.user_id})
+    return {
+        "translations": translations_count,
+        "saved_items": saved_items_count,
+        "plan": current_user.plan
+    }
 
 @router.put("/me", response_model=UserResponse)
 @limiter.limit("20/minute")
@@ -231,6 +248,7 @@ async def update_my_profile(
         username=updated_user.username,
         profile_picture_url=updated_user.profile_picture_url,
         auth_provider=updated_user.auth_provider,
+        plan=updated_user.plan,
         created_at=updated_user.created_at
     )
 
@@ -246,10 +264,14 @@ async def upload_avatar(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File provided is not an image.")
         
+    file_bytes = await file.read()
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image size exceeds 5MB limit.")
+        
     try:
 
         upload_result = cloudinary.uploader.upload(
-            file.file,
+            file_bytes,
             folder="signfusion_avatars",
             public_id=f"avatar_{current_user.id}",
             overwrite=True
@@ -272,12 +294,15 @@ async def upload_avatar(
     
     return UserResponse(
         id=str(updated_user.id),
+        user_id=updated_user.user_id,
         email=updated_user.email,
         full_name=updated_user.full_name,
         bio=updated_user.bio,
         phone_number=updated_user.phone_number,
+        username=updated_user.username,
         profile_picture_url=updated_user.profile_picture_url,
         auth_provider=updated_user.auth_provider,
+        plan=updated_user.plan,
         created_at=updated_user.created_at
     )
 
