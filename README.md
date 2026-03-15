@@ -1,4 +1,4 @@
-# SignFusion 🤟
+# SignFusion
 
 ## The Problem
 Communication between the Deaf/Hard-of-Hearing (DHH) community and the hearing world often hits a massive roadblock. Most people don't know American Sign Language (ASL), and learning it takes years. While we have tools like Google Translate for spoken languages, there isn't a widely accessible, real-time translator that goes from spoken or written English directly into accurate grammatical ASL. This creates an invisible barrier in schools, workplaces, and daily life.
