@@ -18,7 +18,12 @@ def create_access_token(subject: Union[str, Any], expires_delta: Optional[timede
     else:
         expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
 
-    to_encode = {"exp": expire, "sub": str(subject)}
+    to_encode = {
+        "exp": expire, 
+        "sub": str(subject),
+        "iat": datetime.utcnow(),
+        "iss": "SignFusion"
+    }
     
     encoded_jwt = jwt.encode(
         to_encode, 

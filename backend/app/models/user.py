@@ -14,7 +14,6 @@ class PyObjectId(ObjectId):
 
 class UserDBModel(BaseModel):
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    user_id: str
     email: EmailStr
     username: Optional[str] = None
     hashed_password: Optional[str] = None

@@ -21,7 +21,6 @@ class TaskDBModel(BaseModel):
     input_doc_address: Optional[str] = None
     processed_text: Optional[str] = None
     asl_grammar_output: Optional[str] = None
-    gesture_sequence: Optional[list] = None
     emotion_id: Optional[str] = None
     sentiment_animation_id: Optional[str] = None
     gesture_animation_ids: Optional[list] = None

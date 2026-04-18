@@ -11,8 +11,10 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_algorithm: str
     access_token_expire_minutes: int
+    cors_origins: str | list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()

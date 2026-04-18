@@ -26,7 +26,6 @@ class UserCreateRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: str
-    user_id: str
     email: EmailStr
     username: str | None = None
     full_name: str
