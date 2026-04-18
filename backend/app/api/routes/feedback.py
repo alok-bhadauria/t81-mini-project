@@ -5,9 +5,7 @@ from app.api.dependencies import get_current_user, get_db
 from app.models.user import UserDBModel
 from app.models.feedback import FeedbackDBModel
 from app.schemas.feedback import FeedbackCreate, FeedbackResponse
-import slowapi
-
-limiter = slowapi.Limiter(key_func=slowapi.util.get_remote_address)
+from app.core.rate_limit import limiter
 router = APIRouter(prefix="/api/v1/feedback", tags=["Feedback"])
 
 @router.post("", response_model=FeedbackResponse, status_code=status.HTTP_201_CREATED)
@@ -18,9 +16,6 @@ async def create_feedback(
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-    """
-    Submit a new feedback ticket. 
-    """
     feedback_doc = FeedbackDBModel(
         user_id=str(current_user.id),
         subject=payload.subject,

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import uuid
 from fastapi.security import OAuth2PasswordRequestForm
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
 
 from app.api.dependencies import get_db, get_current_user
 from app.core.security import get_password_hash, verify_password, create_access_token
@@ -11,12 +12,14 @@ from app.schemas.user import UserCreateRequest, UserResponse, GoogleAuthRequest,
 from fastapi import Request, UploadFile, File
 import cloudinary
 import cloudinary.uploader
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 import httpx
 from pydantic import BaseModel
+from app.core.rate_limit import limiter
+import logging
+from pymongo.errors import DuplicateKeyError
+import uuid
 
-limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -36,16 +39,9 @@ async def register_user(
         
     hashed_pwd = get_password_hash(payload.password)
 
-    count = await db["users"].count_documents({}) + 1
-    username = f"sf{count:05d}"
-    while await db["users"].find_one({"username": username}):
-        count += 1
-        username = f"sf{count:05d}"
+    username = f"sf{str(uuid.uuid4().int)[:10]}"
 
-    custom_user_id = f"sf{str(uuid.uuid4().int)[:10]}"
-    
     new_user = UserDBModel(
-        user_id=custom_user_id,
         email=payload.email,
         username=username,
         hashed_password=hashed_pwd,
@@ -54,9 +50,13 @@ async def register_user(
         plan="free"
     )
     
-    result = await db["users"].insert_one(
-        new_user.model_dump(by_alias=True, exclude=["id"])
-    )
+    try:
+        result = await db["users"].insert_one(
+            new_user.model_dump(by_alias=True, exclude=["id"])
+        )
+    except DuplicateKeyError as e:
+        logger.exception("Duplicate key error during registration:")
+        raise HTTPException(status_code=400, detail="Username or Email already registered.")
     
     new_user.id = result.inserted_id
 
@@ -128,37 +128,35 @@ async def google_auth(
     payload: GoogleAuthRequest,
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            "https://www.googleapis.com/oauth2/v3/userinfo", 
-            headers={"Authorization": f"Bearer {payload.access_token}"}
-        )
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Invalid Google access token"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo", 
+                headers={"Authorization": f"Bearer {payload.access_token}"}
             )
-            
-        user_info = response.json()
-        email = user_info["email"]
-        name = user_info.get("name", "Google User")
-        google_id = user_info["sub"]
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, 
+                    detail="Invalid Google access token"
+                )
+                
+            user_info = response.json()
+            email = user_info["email"]
+            name = user_info.get("name", "Google User")
+            google_id = user_info["sub"]
+    except httpx.RequestError as e:
+        logger.exception("Google auth network request failed:")
+        raise HTTPException(status_code=503, detail="Google authentication service unavailable")
         
     user_doc = await db["users"].find_one({"email": email})
     
     is_new_user = False
+    
     if not user_doc:
         is_new_user = True
-        count = await db["users"].count_documents({}) + 1
-        username = f"sf{count:05d}"
-        while await db["users"].find_one({"username": username}):
-            count += 1
-            username = f"sf{count:05d}"
+        username = f"sf{str(uuid.uuid4().int)[:10]}"
 
-        custom_user_id = f"sf{str(uuid.uuid4().int)[:10]}"
-            
         new_user = UserDBModel(
-            user_id=custom_user_id,
             email=email,
             username=username,
             auth_provider="GOOGLE",
@@ -166,8 +164,12 @@ async def google_auth(
             full_name=name,
             plan="free"
         )
-        result = await db["users"].insert_one(new_user.model_dump(by_alias=True, exclude=["id"]))
-        user_id = str(result.inserted_id)
+        try:
+            result = await db["users"].insert_one(new_user.model_dump(by_alias=True, exclude=["id"]))
+            user_id = str(result.inserted_id)
+        except DuplicateKeyError:
+            logger.exception("Duplicate key error during Google auth:")
+            raise HTTPException(status_code=400, detail="Failed to complete registration due to duplicate constraints.")
     else:
         user_id = str(user_doc["_id"])
         
@@ -182,7 +184,6 @@ async def get_my_profile(
 ):
     return UserResponse(
         id=str(current_user.id),
-        user_id=current_user.user_id,
         email=current_user.email,
         username=current_user.username,
         full_name=current_user.full_name,
@@ -201,8 +202,8 @@ async def get_my_stats(
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-    translations_count = await db["tasks"].count_documents({"user_id": current_user.user_id})
-    saved_items_count = await db["uploads"].count_documents({"user_id": current_user.user_id})
+    translations_count = await db["tasks"].count_documents({"user_id": str(current_user.id)})
+    saved_items_count = await db["tasks"].count_documents({"input_type": "DOCUMENT", "user_id": str(current_user.id)})
     return {
         "translations": translations_count,
         "saved_items": saved_items_count,
@@ -230,7 +231,7 @@ async def update_my_profile(
     result = await db["users"].find_one_and_update(
         {"_id": current_user.id},
         {"$set": update_data},
-        return_document=True
+        return_document=ReturnDocument.AFTER
     )
     
     if not result:
@@ -240,7 +241,6 @@ async def update_my_profile(
     
     return UserResponse(
         id=str(updated_user.id),
-        user_id=updated_user.user_id,
         email=updated_user.email,
         full_name=updated_user.full_name,
         bio=updated_user.bio,
@@ -278,13 +278,13 @@ async def upload_avatar(
         )
         secure_url = upload_result.get("secure_url")
     except Exception as e:
-
+        logger.exception("Cloudinary Image failure:")
         secure_url = f"https://ui-avatars.com/api/?name={current_user.full_name.replace(' ', '+')}&background=random"
 
     result = await db["users"].find_one_and_update(
         {"_id": current_user.id},
         {"$set": {"profile_picture_url": secure_url}},
-        return_document=True
+        return_document=ReturnDocument.AFTER
     )
 
     if not result:
@@ -294,7 +294,6 @@ async def upload_avatar(
     
     return UserResponse(
         id=str(updated_user.id),
-        user_id=updated_user.user_id,
         email=updated_user.email,
         full_name=updated_user.full_name,
         bio=updated_user.bio,

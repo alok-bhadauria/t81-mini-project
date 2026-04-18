@@ -1,0 +1,15 @@
+{
+  "YESTERDAY": "ga045", "TODAY": "ga046", "TOMORROW": "ga047",
+  "NOW": "ga048", "LATER": "ga049", "MORNING": "ga050",
+  "AFTERNOON": "ga051", "EVENING": "ga052", "NIGHT": "ga053", "SOON": "ga054",
+  "WHO": "ga101", "WHAT": "ga102", "WHERE": "ga103",
+  "WHEN": "ga104", "WHY": "ga105", "HOW": "ga106", "WHICH": "ga107",
+  "NOT": "ga201", "NO": "ga202", "NEVER": "ga203", 
+  "NONE": "ga204", "NOTHING": "ga205",
+  "RUN": "ga301", "WALK": "ga302", "EAT": "ga303", "DRINK": "ga304",
+  "SLEEP": "ga305", "WORK": "ga306", "PLAY": "ga307", "HELP": "ga308",
+  "FAST": "ga309", "SLOW": "ga310", "GOOD": "ga311", "BAD": "ga312",
+  "BEAUTIFUL": "ga313", "UGLY": "ga314", "HAPPY": "ga315", "SAD": "ga316",
+  "I": "ga401", "YOU": "ga402", "HE": "ga403", 
+  "SHE": "ga404", "WE": "ga405", "THEY": "ga406"
+}

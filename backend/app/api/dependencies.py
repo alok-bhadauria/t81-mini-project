@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
+from bson.errors import InvalidId
 
 from app.db.mongodb import get_database
 from app.core.config import settings
@@ -25,15 +26,25 @@ async def get_current_user(
     )
     
     try:
-
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except JWTError:
         raise credentials_exception
 
-    user_doc = await db["users"].find_one({"_id": ObjectId(user_id)})
+    try:
+        obj_id = ObjectId(user_id)
+    except InvalidId:
+        raise credentials_exception
+
+    user_doc = await db["users"].find_one({"_id": obj_id})
     if user_doc is None:
         raise credentials_exception
 

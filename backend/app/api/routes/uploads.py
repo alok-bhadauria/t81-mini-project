@@ -4,11 +4,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.api.dependencies import get_db, get_current_user
 from app.models.user import UserDBModel
 from app.models.task import PyObjectId
-
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
+from app.core.rate_limit import limiter
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
 @router.get("")
