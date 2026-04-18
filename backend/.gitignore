@@ -9,6 +9,8 @@ t81-backend/
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 *$py.class
 *.so
 *.egg
