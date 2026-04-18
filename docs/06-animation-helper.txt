@@ -6,7 +6,7 @@
 
 This document serves as the master blueprint for the 3D Animation mapping pipeline.
 Animators must create Blender animations (.glb) and name them exactly according to the IDs listed below.
-The backend pipeline (step3b_animation_mapper.py) relies natively on these IDs to trigger the Three.js avatar.
+The backend pipeline (specifically 02_animation_service.py) relies natively on checking the external flat JSON indices (app/data/gesture_map.json and sentiment_map.json) to trigger the Three.js avatar accurately avoiding tight coupling.
 
 ---------------------------------------------------------------------
 

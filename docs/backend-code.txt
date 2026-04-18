@@ -1,0 +1,1542 @@
+SIGNFUSION BACKEND ARCHITECTURE AND CODE
+
+--------------------------------------------------------------------------------
+FILE: backend\app\main.py
+--------------------------------------------------------------------------------
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+from app.db.mongodb import connect_to_mongo, close_mongo_connection, get_database
+from app.core.config import settings
+import cloudinary
+from app.api.routes import text, auth, history, uploads, feedback
+from app.core.exceptions import AppException
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from app.core.rate_limit import limiter
+import uuid
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+class RequestLoggingAndMaxBodySizeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        req_id = str(uuid.uuid4())
+        request.state.request_id = req_id
+        logger.info(f"Request started: {req_id} - {request.method} {request.url.path}")
+        start_time = time.time()
+        
+        if "content-length" in request.headers:
+            try:
+                content_length = int(request.headers["content-length"])
+                if content_length > 10 * 1024 * 1024:
+                    logger.warning(f"Request {req_id} rejected: Payload Too Large ({content_length} bytes)")
+                    return JSONResponse(status_code=413, content={"detail": "Payload Too Large"})
+            except ValueError:
+                pass
+                
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        
+        process_time = time.time() - start_time
+        logger.info(f"Request finished: {req_id} - Status {response.status_code} in {process_time:.4f}s")
+        return response
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_to_mongo()
+    db = get_database()
+
+    await db["users"].create_index("email", unique=True, background=True)
+    await db["users"].create_index("username", unique=True, background=True)
+    await db["tasks"].create_index("user_id", background=True)
+    await db["tasks"].create_index("created_at", background=True)
+    await db["tasks"].create_index("input_type", background=True)
+    
+    cloudinary.config(
+        cloud_name=settings.cloudinary_cloud_name,
+        api_key=settings.cloudinary_api_key,
+        api_secret=settings.cloudinary_api_secret,
+        secure=True
+    )
+    
+    yield
+    await close_mongo_connection()
+
+app = FastAPI(
+    title="SignFusion Backend API",
+    description="Scalable backend for handling multimodal Sign Language translation requests.",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+    )
+
+app.add_middleware(RequestLoggingAndMaxBodySizeMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins if isinstance(settings.cors_origins, list) else settings.cors_origins.split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.add_middleware(SlowAPIMiddleware)
+
+@app.middleware("http")
+async def secure_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+app.include_router(text.router)
+app.include_router(auth.router)
+app.include_router(history.router)
+app.include_router(uploads.router)
+app.include_router(feedback.router)
+
+@app.get("/")
+@limiter.limit("10/minute")
+async def root(request: Request):
+    return {"message": "SignFusion API is running gracefully."}
+
+@app.get("/health")
+async def health_check():
+    try:
+        db = get_database()
+        await db.command("ping")
+        return {"status": "ok"}
+    except Exception:
+        return {"status": "db_error"}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\__init__.py
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\dependencies.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
+from bson.errors import InvalidId
+
+from app.db.mongodb import get_database
+from app.core.config import settings
+from app.models.user import UserDBModel
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+async def get_db():
+    return get_database()
+
+async def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+) -> UserDBModel:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except JWTError:
+        raise credentials_exception
+
+    try:
+        obj_id = ObjectId(user_id)
+    except InvalidId:
+        raise credentials_exception
+
+    user_doc = await db["users"].find_one({"_id": obj_id})
+    if user_doc is None:
+        raise credentials_exception
+
+    user = UserDBModel(**user_doc)
+    return user
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\auth.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import APIRouter, Depends, HTTPException, status
+import uuid
+from fastapi.security import OAuth2PasswordRequestForm
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
+
+from app.api.dependencies import get_db, get_current_user
+from app.core.security import get_password_hash, verify_password, create_access_token
+from app.models.user import UserDBModel
+from app.schemas.user import UserCreateRequest, UserResponse, GoogleAuthRequest, UserUpdateRequest, PasswordUpdateRequest
+from fastapi import Request, UploadFile, File
+import cloudinary
+import cloudinary.uploader
+import httpx
+from pydantic import BaseModel
+from app.core.rate_limit import limiter
+import logging
+from pymongo.errors import DuplicateKeyError
+import uuid
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
+async def register_user(
+    request: Request,
+    payload: UserCreateRequest, 
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    existing_user = await db["users"].find_one({"email": payload.email})
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Email already registered"
+        )
+        
+    hashed_pwd = get_password_hash(payload.password)
+
+    username = f"sf{str(uuid.uuid4().int)[:10]}"
+
+    new_user = UserDBModel(
+        email=payload.email,
+        username=username,
+        hashed_password=hashed_pwd,
+        auth_provider="LOCAL",
+        full_name=payload.full_name,
+        plan="free"
+    )
+    
+    try:
+        result = await db["users"].insert_one(
+            new_user.model_dump(by_alias=True, exclude=["id"])
+        )
+    except DuplicateKeyError as e:
+        logger.exception("Duplicate key error during registration:")
+        raise HTTPException(status_code=400, detail="Username or Email already registered.")
+    
+    new_user.id = result.inserted_id
+
+    return UserResponse(
+        id=str(new_user.id),
+        email=new_user.email,
+        username=new_user.username,
+        full_name=new_user.full_name,
+        auth_provider=new_user.auth_provider,
+        plan=new_user.plan,
+        created_at=new_user.created_at
+    )
+
+class UsernameCheckResponse(BaseModel):
+    available: bool
+
+@router.get("/check-username", response_model=UsernameCheckResponse)
+@limiter.limit("30/minute")
+async def check_username(
+    request: Request,
+    username: str,
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    if not username or len(username) < 5 or len(username) > 20:
+        return {"available": False}
+
+    user_doc = await db["users"].find_one({"username": username})
+    return {"available": user_doc is None}
+
+@router.post("/login")
+@limiter.limit("10/minute")
+async def login_user(
+    request: Request,
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+
+    identifier = form_data.username
+    user_doc = await db["users"].find_one({
+        "$or": [
+            {"email": identifier},
+            {"username": identifier}
+        ]
+    })
+    if not user_doc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    user = UserDBModel(**user_doc)
+
+    if user.auth_provider == "LOCAL" and not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token = create_access_token(subject=str(user.id))
+    
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@router.post("/google")
+@limiter.limit("10/minute")
+async def google_auth(
+    request: Request,
+    payload: GoogleAuthRequest,
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo", 
+                headers={"Authorization": f"Bearer {payload.access_token}"}
+            )
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, 
+                    detail="Invalid Google access token"
+                )
+                
+            user_info = response.json()
+            email = user_info["email"]
+            name = user_info.get("name", "Google User")
+            google_id = user_info["sub"]
+    except httpx.RequestError as e:
+        logger.exception("Google auth network request failed:")
+        raise HTTPException(status_code=503, detail="Google authentication service unavailable")
+        
+    user_doc = await db["users"].find_one({"email": email})
+    
+    is_new_user = False
+    
+    if not user_doc:
+        is_new_user = True
+        username = f"sf{str(uuid.uuid4().int)[:10]}"
+
+        new_user = UserDBModel(
+            email=email,
+            username=username,
+            auth_provider="GOOGLE",
+            google_id=google_id,
+            full_name=name,
+            plan="free"
+        )
+        try:
+            result = await db["users"].insert_one(new_user.model_dump(by_alias=True, exclude=["id"]))
+            user_id = str(result.inserted_id)
+        except DuplicateKeyError:
+            logger.exception("Duplicate key error during Google auth:")
+            raise HTTPException(status_code=400, detail="Failed to complete registration due to duplicate constraints.")
+    else:
+        user_id = str(user_doc["_id"])
+        
+    access_token = create_access_token(subject=user_id)
+    return {"access_token": access_token, "token_type": "bearer", "is_new_user": is_new_user}
+
+@router.get("/me", response_model=UserResponse)
+@limiter.limit("30/minute")
+async def get_my_profile(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)]
+):
+    return UserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        username=current_user.username,
+        full_name=current_user.full_name,
+        bio=current_user.bio,
+        phone_number=current_user.phone_number,
+        profile_picture_url=current_user.profile_picture_url,
+        auth_provider=current_user.auth_provider,
+        plan=current_user.plan,
+        created_at=current_user.created_at
+    )
+
+@router.get("/me/stats")
+@limiter.limit("30/minute")
+async def get_my_stats(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    translations_count = await db["tasks"].count_documents({"user_id": str(current_user.id)})
+    saved_items_count = await db["tasks"].count_documents({"input_type": "DOCUMENT", "user_id": str(current_user.id)})
+    return {
+        "translations": translations_count,
+        "saved_items": saved_items_count,
+        "plan": current_user.plan
+    }
+
+@router.put("/me", response_model=UserResponse)
+@limiter.limit("20/minute")
+async def update_my_profile(
+    request: Request,
+    payload: UserUpdateRequest,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    update_data = {k: v for k, v in payload.model_dump().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields provided to update")
+    if "username" in update_data:
+        if len(update_data["username"]) < 5 or len(update_data["username"]) > 20:
+            raise HTTPException(status_code=400, detail="Username must be between 5 and 20 characters")
+        if await db["users"].find_one({"username": update_data["username"], "_id": {"$ne": current_user.id}}):
+            raise HTTPException(status_code=400, detail="Username is already taken")
+        
+    result = await db["users"].find_one_and_update(
+        {"_id": current_user.id},
+        {"$set": update_data},
+        return_document=ReturnDocument.AFTER
+    )
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    updated_user = UserDBModel(**result)
+    
+    return UserResponse(
+        id=str(updated_user.id),
+        email=updated_user.email,
+        full_name=updated_user.full_name,
+        bio=updated_user.bio,
+        phone_number=updated_user.phone_number,
+        username=updated_user.username,
+        profile_picture_url=updated_user.profile_picture_url,
+        auth_provider=updated_user.auth_provider,
+        plan=updated_user.plan,
+        created_at=updated_user.created_at
+    )
+
+@router.post("/me/avatar", response_model=UserResponse)
+@limiter.limit("5/minute")
+async def upload_avatar(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    file: UploadFile = File(...)
+):
+
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File provided is not an image.")
+        
+    file_bytes = await file.read()
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image size exceeds 5MB limit.")
+        
+    try:
+
+        upload_result = cloudinary.uploader.upload(
+            file_bytes,
+            folder="signfusion_avatars",
+            public_id=f"avatar_{current_user.id}",
+            overwrite=True
+        )
+        secure_url = upload_result.get("secure_url")
+    except Exception as e:
+        logger.exception("Cloudinary Image failure:")
+        secure_url = f"https://ui-avatars.com/api/?name={current_user.full_name.replace(' ', '+')}&background=random"
+
+    result = await db["users"].find_one_and_update(
+        {"_id": current_user.id},
+        {"$set": {"profile_picture_url": secure_url}},
+        return_document=ReturnDocument.AFTER
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    updated_user = UserDBModel(**result)
+    
+    return UserResponse(
+        id=str(updated_user.id),
+        email=updated_user.email,
+        full_name=updated_user.full_name,
+        bio=updated_user.bio,
+        phone_number=updated_user.phone_number,
+        username=updated_user.username,
+        profile_picture_url=updated_user.profile_picture_url,
+        auth_provider=updated_user.auth_provider,
+        plan=updated_user.plan,
+        created_at=updated_user.created_at
+    )
+
+@router.put("/password")
+@limiter.limit("5/minute")
+async def update_password(
+    request: Request,
+    payload: PasswordUpdateRequest,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    if current_user.auth_provider != "LOCAL":
+        raise HTTPException(status_code=400, detail="Cannot change password for social login accounts")
+        
+    if not current_user.hashed_password or not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+        
+    hashed_pwd = get_password_hash(payload.new_password)
+    
+    await db["users"].update_one(
+        {"_id": current_user.id},
+        {"$set": {"hashed_password": hashed_pwd}}
+    )
+    
+    return {"message": "Password updated successfully"}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\feedback.py
+--------------------------------------------------------------------------------
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from typing import Annotated
+from app.api.dependencies import get_current_user, get_db
+from app.models.user import UserDBModel
+from app.models.feedback import FeedbackDBModel
+from app.schemas.feedback import FeedbackCreate, FeedbackResponse
+from app.core.rate_limit import limiter
+router = APIRouter(prefix="/api/v1/feedback", tags=["Feedback"])
+
+@router.post("", response_model=FeedbackResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
+async def create_feedback(
+    request: Request,
+    payload: FeedbackCreate,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    feedback_doc = FeedbackDBModel(
+        user_id=str(current_user.id),
+        subject=payload.subject,
+        message=payload.message
+    )
+    
+    result = await db["feedback"].insert_one(feedback_doc.model_dump(by_alias=True))
+    
+    if not result.inserted_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to submit feedback at this time."
+        )
+        
+    saved_doc = await db["feedback"].find_one({"_id": result.inserted_id})
+    return FeedbackResponse(**saved_doc, id=str(saved_doc["_id"]))
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\history.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import APIRouter, Depends, HTTPException, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.api.dependencies import get_db, get_current_user
+from app.models.user import UserDBModel
+from app.models.task import PyObjectId
+
+from slowapi.util import get_remote_address
+from app.core.rate_limit import limiter
+router = APIRouter(prefix="/api/v1/history", tags=["history"])
+
+@router.get("")
+@limiter.limit("30/minute")
+async def get_history(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    pipeline = [
+        {"$match": {"user_id": str(current_user.id), "input_type": {"$in": ["TEXT", "SPEECH"]}}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 50}
+    ]
+    cursor = db["tasks"].aggregate(pipeline)
+    items = await cursor.to_list(length=50)
+    
+    results = []
+    for item in items:
+        results.append({
+            "id": str(item["_id"]),
+            "text": item.get("input_text", ""),
+            "asl": item.get("asl_grammar_output", ""),
+            "date": item.get("created_at").isoformat() if item.get("created_at") else ""
+        })
+    return results
+
+@router.delete("/{history_id}")
+@limiter.limit("20/minute")
+async def delete_history_item(
+    request: Request,
+    history_id: str,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    result = await db["tasks"].delete_one({"_id": PyObjectId(history_id), "user_id": str(current_user.id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="History not found or unauthorized")
+        
+    return {"message": "History and associated outputs deleted"}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\text.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import APIRouter, Depends
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.api.dependencies import get_db, get_current_user
+from app.schemas.text import TextInputRequest, TextInputResponse
+from app.models.user import UserDBModel
+from app.db.task_repository import TaskRepository
+from app.services.e_orchestrator import PipelineOrchestrator
+from fastapi import Request
+from app.core.rate_limit import limiter
+
+router = APIRouter(prefix="/api/v1/text", tags=["text"])
+
+@router.post("", response_model=TextInputResponse)
+@limiter.limit("60/minute")
+async def accept_text_input(
+    request: Request,
+    payload: TextInputRequest,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    metadata = {"filename": payload.filename} if payload.filename else None
+    
+    repository = TaskRepository(db)
+    orchestrator = PipelineOrchestrator(repository)
+    
+    return await orchestrator.run(
+        raw_text=payload.text,
+        user_id=str(current_user.id),
+        input_type=payload.type.value,
+        file_metadata=metadata
+    )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\uploads.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import APIRouter, Depends, HTTPException, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.api.dependencies import get_db, get_current_user
+from app.models.user import UserDBModel
+from app.models.task import PyObjectId
+from app.core.rate_limit import limiter
+router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
+
+@router.get("")
+@limiter.limit("30/minute")
+async def get_uploads(
+    request: Request,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    pipeline = [
+        {"$match": {"user_id": str(current_user.id), "input_type": "DOCUMENT"}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 50}
+    ]
+    cursor = db["tasks"].aggregate(pipeline)
+    items = await cursor.to_list(length=50)
+    
+    results = []
+    for item in items:
+        metadata = item.get("file_metadata") or {}
+        filename = metadata.get("filename") or "Unknown Document"
+        results.append({
+            "id": str(item["_id"]),
+            "name": filename,
+            "description": f"Extracted text: {item.get('input_text', '')[:80]}...",
+            "date": item.get("created_at").isoformat() if item.get("created_at") else ""
+        })
+    return results
+
+@router.delete("/{upload_id}")
+@limiter.limit("20/minute")
+async def delete_upload_item(
+    request: Request,
+    upload_id: str,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    result = await db["tasks"].delete_one({"_id": PyObjectId(upload_id), "user_id": str(current_user.id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Upload not found or unauthorized")
+        
+    return {"message": "Upload deleted"}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\__init__.py
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\config.py
+--------------------------------------------------------------------------------
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    mongodb_uri: str
+    cloudinary_cloud_name: str
+    cloudinary_api_key: str
+    cloudinary_api_secret: str
+    cloudinary_url: str
+    google_client_id: str
+    google_client_secret: str
+    jwt_secret_key: str
+    jwt_algorithm: str
+    access_token_expire_minutes: int
+    cors_origins: str | list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+settings = Settings()
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\exceptions.py
+--------------------------------------------------------------------------------
+class AppException(Exception):
+    def __init__(self, message: str, status_code: int = 400):
+        self.message = message
+        self.status_code = status_code
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\nlp_loader.py
+--------------------------------------------------------------------------------
+import spacy
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    logger.warning("SpaCy model 'en_core_web_sm' is missing. NLP operations will fail during runtime.")
+    nlp = None
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\rate_limit.py
+--------------------------------------------------------------------------------
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\security.py
+--------------------------------------------------------------------------------
+from datetime import datetime, timedelta
+from typing import Optional, Union, Any
+from passlib.context import CryptContext
+from jose import jwt
+from app.core.config import settings
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def create_access_token(subject: Union[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+
+    to_encode = {
+        "exp": expire, 
+        "sub": str(subject),
+        "iat": datetime.utcnow(),
+        "iss": "SignFusion"
+    }
+    
+    encoded_jwt = jwt.encode(
+        to_encode, 
+        settings.jwt_secret_key, 
+        algorithm=settings.jwt_algorithm
+    )
+    return encoded_jwt
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\data\gesture_map.json
+--------------------------------------------------------------------------------
+{
+  "YESTERDAY": "ga045", "TODAY": "ga046", "TOMORROW": "ga047",
+  "NOW": "ga048", "LATER": "ga049", "MORNING": "ga050",
+  "AFTERNOON": "ga051", "EVENING": "ga052", "NIGHT": "ga053", "SOON": "ga054",
+  "WHO": "ga101", "WHAT": "ga102", "WHERE": "ga103",
+  "WHEN": "ga104", "WHY": "ga105", "HOW": "ga106", "WHICH": "ga107",
+  "NOT": "ga201", "NO": "ga202", "NEVER": "ga203", 
+  "NONE": "ga204", "NOTHING": "ga205",
+  "RUN": "ga301", "WALK": "ga302", "EAT": "ga303", "DRINK": "ga304",
+  "SLEEP": "ga305", "WORK": "ga306", "PLAY": "ga307", "HELP": "ga308",
+  "FAST": "ga309", "SLOW": "ga310", "GOOD": "ga311", "BAD": "ga312",
+  "BEAUTIFUL": "ga313", "UGLY": "ga314", "HAPPY": "ga315", "SAD": "ga316",
+  "I": "ga401", "YOU": "ga402", "HE": "ga403", 
+  "SHE": "ga404", "WE": "ga405", "THEY": "ga406"
+}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\data\sentiment_map.json
+--------------------------------------------------------------------------------
+{
+  "HAPPY": "sa001",
+  "SAD": "sa002",
+  "NEUTRAL": "sa003",
+  "ANGRY": "sa004",
+  "SURPRISED": "sa005",
+  "FEAR": "sa006",
+  "DISGUST": "sa007",
+  "EXCITED": "sa008",
+  "BORED": "sa009",
+  "CONFUSED": "sa010"
+}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\db\mongodb.py
+--------------------------------------------------------------------------------
+from motor.motor_asyncio import AsyncIOMotorClient
+import sys
+from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+class Database:
+    client: AsyncIOMotorClient = None
+
+db = Database()
+
+async def connect_to_mongo():
+    try:
+        db.client = AsyncIOMotorClient(settings.mongodb_uri)
+        await db.client.admin.command('ping')
+        logger.info("Successfully connected to core MongoDB clusters.")
+    except Exception:
+        logger.exception("FATAL: Failed to connect to MongoDB cluster:")
+        sys.exit(1)
+
+async def close_mongo_connection():
+    if db.client:
+        db.client.close()
+
+def get_database():
+    return db.client.signfusion
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\db\task_repository.py
+--------------------------------------------------------------------------------
+import logging
+from datetime import datetime
+from app.models.task import TaskDBModel
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.exceptions import AppException
+import uuid
+
+logger = logging.getLogger(__name__)
+
+class TaskRepository:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.collection = self.db.get_collection("tasks")
+
+    async def create_task(self, user_id: str, input_type: str, raw_text: str, processed_text: str, 
+                          emotion_id: str, asl_grammar_output: str, sentiment_animation_id: str, 
+                          gesture_animation_ids: list[str], animation_sequence: list[dict], 
+                          file_metadata: dict = None) -> TaskDBModel:
+        logger.info(f"TaskRepository: Inserting translation record for user {user_id}")
+        try:
+            custom_task_id = f"sfip{str(uuid.uuid4().int)[:10]}"
+            task_data = TaskDBModel(
+                user_id=user_id,
+                task_id=custom_task_id,
+                input_type=input_type,
+                input_text=raw_text,
+                processed_text=processed_text,
+                emotion_id=emotion_id,
+                asl_grammar_output=asl_grammar_output,
+                sentiment_animation_id=sentiment_animation_id,
+                gesture_animation_ids=gesture_animation_ids,
+                animation_sequence=animation_sequence,
+                file_metadata=file_metadata,
+                created_at=datetime.utcnow()
+            )
+            
+            task_dict = task_data.dict(by_alias=True, exclude={"id"})
+            
+            result = await self.collection.insert_one(task_dict)
+            if not result.inserted_id:
+                raise AppException("Failed to insert task record into MongoDB", status_code=500)
+                
+            task_data.id = result.inserted_id
+            return task_data
+        except Exception as e:
+            logger.exception("TaskRepository Exception:")
+            raise AppException(f"Database operation failed: {str(e)}", status_code=500) from e
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\models\feedback.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, Field
+from datetime import datetime
+from bson import ObjectId
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v, info=None):
+        if not ObjectId.is_valid(v):
+            raise ValueError("Invalid objectid")
+        return ObjectId(v)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, field_schema):
+        field_schema.update(type="string")
+        return field_schema
+
+class FeedbackDBModel(BaseModel):
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    user_id: str
+    subject: str
+    message: str
+    status: str = Field(default="OPEN")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\models\task.py
+--------------------------------------------------------------------------------
+from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+from bson import ObjectId
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler):
+        from pydantic_core import core_schema
+        return core_schema.union_schema([
+            core_schema.is_instance_schema(ObjectId),
+            core_schema.str_schema(),
+        ])
+
+class TaskDBModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    user_id: str 
+    task_id: str
+    input_type: str
+    input_text: str
+    input_doc_address: Optional[str] = None
+    processed_text: Optional[str] = None
+    asl_grammar_output: Optional[str] = None
+    emotion_id: Optional[str] = None
+    sentiment_animation_id: Optional[str] = None
+    gesture_animation_ids: Optional[list] = None
+    animation_sequence: Optional[list] = None
+    file_metadata: Optional[dict] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+    )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\models\user.py
+--------------------------------------------------------------------------------
+from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from bson import ObjectId
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler):
+        from pydantic_core import core_schema
+        return core_schema.union_schema([
+            core_schema.is_instance_schema(ObjectId),
+            core_schema.str_schema(),
+        ])
+
+class UserDBModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    email: EmailStr
+    username: Optional[str] = None
+    hashed_password: Optional[str] = None
+    auth_provider: str 
+    google_id: Optional[str] = None
+    full_name: str
+    bio: Optional[str] = None
+    phone_number: Optional[str] = None
+    profile_picture_url: Optional[str] = None
+    plan: str = Field(default="free")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+    )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\schemas\feedback.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class FeedbackCreate(BaseModel):
+    subject: str = Field(..., min_length=3, max_length=150)
+    message: str = Field(..., min_length=10, max_length=2000)
+
+class FeedbackResponse(BaseModel):
+    id: str
+    user_id: str
+    subject: str
+    message: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\schemas\internal.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel
+from typing import List
+
+class TokenData(BaseModel):
+    text: str
+    lemma: str
+    pos: str
+    dep: str
+    is_stop: bool
+
+class NLPResult(BaseModel):
+    processed_text: str
+    sentences: List[List[TokenData]]
+    emotion_id: str
+
+class TranslationResult(BaseModel):
+    asl_grammar_output: str
+    asl_tokens: List[str]
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\schemas\text.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, Field
+from typing import Optional
+from enum import Enum
+
+class InputType(str, Enum):
+    TEXT = "TEXT"
+    SPEECH = "SPEECH"
+    DOCUMENT = "DOCUMENT"
+
+class TextInputRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="The textual input from the user/speech recognition")
+    type: InputType = Field(InputType.TEXT, description="Source of the text (TEXT, SPEECH, or DOCUMENT)")
+    filename: Optional[str] = Field(None, description="Optional filename if document was uploaded")
+    
+class TextInputResponse(BaseModel):
+    message: str
+    processed_text: str
+    asl_grammar_output: str
+    sentiment_animation_id: str
+    gesture_animation_ids: list[str]
+    animation_sequence: list[dict]
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\schemas\user.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from datetime import datetime
+import re
+
+class UserCreateRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(
+        ..., 
+        min_length=8,
+        description="Password must contain at least 1 uppercase, 1 lowercase, 1 number, and 1 special character"
+    )
+    full_name: str
+
+    @field_validator('password')
+    @classmethod
+    def validate_password_complexity(cls, v: str) -> str:
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least 1 uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least 1 lowercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least 1 number')
+        if not re.search(r'[@$!%*?&]', v):
+            raise ValueError('Password must contain at least 1 special character (@, $, !, %, *, ?, &)')
+        return v
+
+class UserResponse(BaseModel):
+    id: str
+    email: EmailStr
+    username: str | None = None
+    full_name: str
+    bio: str | None = None
+    phone_number: str | None = None
+    profile_picture_url: str | None = None
+    auth_provider: str
+    plan: str
+    created_at: datetime
+
+class UserUpdateRequest(BaseModel):
+    full_name: str | None = None
+    username: str | None = None
+    bio: str | None = None
+    phone_number: str | None = None
+    profile_picture_url: str | None = None
+
+class PasswordUpdateRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(
+        ..., 
+        min_length=8,
+        description="Password must contain at least 1 uppercase, 1 lowercase, 1 number, and 1 special character"
+    )
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_password_complexity(cls, v: str) -> str:
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least 1 uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least 1 lowercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least 1 number')
+        if not re.search(r'[@$!%*?&]', v):
+            raise ValueError('Password must contain at least 1 special character (@, $, !, %, *, ?, &)')
+        return v
+
+class GoogleAuthRequest(BaseModel):
+    access_token: str
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\a_nlp_service.py
+--------------------------------------------------------------------------------
+import nltk
+from nltk.sentiment import SentimentIntensityAnalyzer
+import re
+from spellchecker import SpellChecker
+from fastapi.concurrency import run_in_threadpool
+import logging
+from app.schemas.internal import NLPResult, TokenData
+from app.core.exceptions import AppException
+from app.core.nlp_loader import nlp
+
+logger = logging.getLogger(__name__)
+
+try:
+    nltk.data.find('sentiment/vader_lexicon.zip')
+except LookupError:
+    nltk.download('vader_lexicon', quiet=True)
+
+sia = SentimentIntensityAnalyzer()
+spell = SpellChecker()
+
+class NLPService:
+    def _correct_word_token(self, word: str) -> str:
+        if (word.isupper() and len(word) > 1) or word.isnumeric():
+            return word
+        if spell.known([word]):
+            return word
+            
+        corr1 = spell.correction(word)
+        if corr1 and corr1 != word and spell.known([corr1]):
+            return corr1
+            
+        reduced_3 = re.sub(r"(.)\1{2,}", r"\1", word)
+        corr2 = spell.correction(reduced_3)
+        if corr2 and spell.known([corr2]):
+            return corr2
+            
+        reduced_2 = re.sub(r"(.)\1+", r"\1", word)
+        corr3 = spell.correction(reduced_2)
+        if corr3 and spell.known([corr3]):
+            return corr3
+            
+        return corr1 if corr1 else word
+
+    def _spellcheck_string(self, text: str) -> str:
+        def replace_match(match):
+            word = match.group(0)
+            is_title = word.istitle()
+            is_upper = word.isupper()
+            
+            corr = self._correct_word_token(word.lower() if not is_upper else word)
+            
+            if is_title:
+                return corr.capitalize()
+            elif is_upper:
+                return corr.upper()
+            return corr
+            
+        return re.sub(r"\b[A-Za-z]+\b", replace_match, text)
+
+    def _sync_process(self, raw_text: str) -> NLPResult:
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raw_text = "ERROR"
+            
+        clean_text = self._spellcheck_string(raw_text)
+        if nlp is None:
+            raise AppException("NLP service unavailable", 503)
+        doc = nlp(clean_text)
+        sentiment = sia.polarity_scores(clean_text)
+        compound_score = sentiment.get("compound", 0.0)
+        
+        if compound_score >= 0.05:
+            overall_emotion = "HAPPY"
+        elif compound_score <= -0.05:
+            overall_emotion = "SAD"
+        else:
+            overall_emotion = "NEUTRAL"
+            
+        all_tokens = []
+        sentences = []
+        for sent in doc.sents:
+            sent_tokens = []
+            for token in sent:
+                if not token.is_punct and not token.is_space:
+                    all_tokens.append(token.text)
+                    token_data = TokenData(
+                        text=token.text,
+                        lemma=token.lemma_,
+                        pos=token.pos_,
+                        dep=token.dep_,
+                        is_stop=token.is_stop
+                    )
+                    sent_tokens.append(token_data)
+            if sent_tokens:
+                sentences.append(sent_tokens)
+            
+        return NLPResult(
+            processed_text=" ".join(all_tokens),
+            sentences=sentences,
+            emotion_id=overall_emotion
+        )
+        
+    async def process(self, text: str) -> NLPResult:
+        logger.info(f"NLPService: Analyzing input text: {text[:50]}... length: {len(text)}")
+        return await run_in_threadpool(self._sync_process, text)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\b_translation_service.py
+--------------------------------------------------------------------------------
+import logging
+from typing import Set, List
+from app.schemas.internal import NLPResult, TranslationResult
+
+logger = logging.getLogger(__name__)
+
+class TranslationService:
+    def __init__(self):
+        self.pos_to_ignore: Set[str] = {"DET", "ADP", "AUX", "PUNCT", "CCONJ", "SCONJ", "PART"}
+        self.time_lemmas: Set[str] = {
+            "yesterday", "today", "tomorrow", "now", "later", 
+            "morning", "afternoon", "evening", "night", "soon",
+            "past", "future", "always", "never", "sometimes", "week", "month", "year"
+        }
+        self.wh_words: Set[str] = {"who", "what", "where", "when", "why", "how", "which"}
+        self.negation_words: Set[str] = {"not", "no", "never", "none", "nothing", "nobody", "nowhere", "neither"}
+
+    def translate(self, nlp_data: NLPResult) -> TranslationResult:
+        logger.info("TranslationService: Initiating exact ASL token translation engine")
+        final_asl_sequence: List[str] = []
+        
+        for sent_tokens in nlp_data.sentences:
+            time_tokens: List[str] = []
+            core_tokens: List[str] = []
+            wh_tokens: List[str] = []
+            neg_tokens: List[str] = []
+            
+            idx = 0
+            while idx < len(sent_tokens):
+                token = sent_tokens[idx]
+                pos = token.pos
+                lemma = token.lemma.upper()
+                
+                is_neg = lemma.lower() in self.negation_words
+                is_wh = lemma.lower() in self.wh_words
+                
+                if (pos in self.pos_to_ignore or token.is_stop) and pos != "PRON" and pos != "NUM" and not is_neg and not is_wh and not lemma.isnumeric():
+                    idx += 1
+                    continue
+                    
+                if is_neg:
+                    neg_tokens.append(lemma)
+                elif is_wh:
+                    wh_tokens.append(lemma)
+                elif lemma.lower() in self.time_lemmas:
+                    time_tokens.append(lemma)
+                elif lemma.isnumeric():
+                    core_tokens.append(lemma)
+                else:
+                    if pos == "ADJ" and (idx + 1 < len(sent_tokens)) and sent_tokens[idx + 1].pos in {"NOUN", "PROPN"}:
+                        next_lemma = sent_tokens[idx + 1].lemma.upper()
+                        core_tokens.append(next_lemma)
+                        core_tokens.append(lemma)
+                        idx += 1
+                    else:
+                        core_tokens.append(lemma)
+                
+                idx += 1
+                
+            final_asl_sequence.extend(time_tokens + core_tokens + neg_tokens + wh_tokens)
+            
+        if not final_asl_sequence:
+            final_asl_sequence = ["NONE"]
+            
+        return TranslationResult(
+            asl_grammar_output=" ".join(final_asl_sequence),
+            asl_tokens=final_asl_sequence
+        )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\c_animation_service.py
+--------------------------------------------------------------------------------
+import json
+import logging
+import os
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+class AnimationService:
+    _gesture_map = None
+    _sentiment_map = None
+    
+    def __init__(self):
+        self._load_mappings()
+        
+    @classmethod
+    def _load_mappings(cls):
+        if cls._gesture_map is not None and cls._sentiment_map is not None:
+            return
+            
+        logger.info("AnimationService: Loading JSON maps into Singleton memory cache.")
+        
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        gesture_path = os.path.join(base_dir, "data", "gesture_map.json")
+        sentiment_path = os.path.join(base_dir, "data", "sentiment_map.json")
+        
+        try:
+            with open(gesture_path, "r") as f:
+                cls._gesture_map = json.load(f)
+            with open(sentiment_path, "r") as f:
+                cls._sentiment_map = json.load(f)
+        except Exception as e:
+            logger.exception("AnimationService failed to load maps:")
+            raise RuntimeError("Failed to load animation maps") from e
+
+    def get_sentiment_id(self, emotion: str) -> str:
+        return self._sentiment_map.get(emotion.upper(), "sa003")
+        
+    def _get_gesture_animation_ids(self, asl_tokens: List[str]) -> List[str]:
+        if not self._gesture_map:
+            raise RuntimeError("Gesture map not initialized")
+        animation_ids: List[str] = []
+        for token in asl_tokens:
+            token_upper = token.upper()
+            if token_upper in self._gesture_map:
+                animation_ids.append(self._gesture_map[token_upper])
+            else:
+                for char in token_upper:
+                    if char.isalpha():
+                        animation_ids.append(f"gaLET_{char}")
+                    elif char.isdigit():
+                        animation_ids.append(f"gaNUM_{char}")
+        return animation_ids
+
+    def map(self, emotion_id: str, asl_tokens: List[str]) -> Dict[str, Any]:
+        logger.info("AnimationService: Mapping generated tree against static dictionary")
+        sa_id = self.get_sentiment_id(emotion_id)
+        
+        animation_seq = []
+        all_ga_ids = []
+        
+        for token in asl_tokens:
+            token_ga_ids = self._get_gesture_animation_ids([token])
+            animation_seq.append({
+                "word": token.upper(),
+                "gesture_animation_ids": token_ga_ids
+            })
+            all_ga_ids.extend(token_ga_ids)
+            
+        return {
+            "sentiment_animation_id": sa_id,
+            "gesture_animation_ids": all_ga_ids,
+            "animation_sequence": animation_seq
+        }
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\d_output_service.py
+--------------------------------------------------------------------------------
+import logging
+from app.schemas.text import TextInputResponse
+
+logger = logging.getLogger(__name__)
+
+class OutputService:
+    def format_api_response(self, 
+                            processed_text: str, 
+                            asl_grammar_output: str, 
+                            sentiment_animation_id: str, 
+                            gesture_animation_ids: list[str], 
+                            animation_sequence: list[dict]) -> TextInputResponse:
+        logger.info("OutputService: Safely formatting standardized JSON API Response Structure.")
+        return TextInputResponse(
+            message="Text input received and stored successfully.",
+            processed_text=processed_text,
+            asl_grammar_output=asl_grammar_output,
+            sentiment_animation_id=sentiment_animation_id,
+            gesture_animation_ids=gesture_animation_ids,
+            animation_sequence=animation_sequence
+        )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\e_orchestrator.py
+--------------------------------------------------------------------------------
+import logging
+from app.services.a_nlp_service import NLPService
+from app.services.b_translation_service import TranslationService
+from app.services.c_animation_service import AnimationService
+from app.services.d_output_service import OutputService
+from app.db.task_repository import TaskRepository
+from app.schemas.text import TextInputResponse
+
+logger = logging.getLogger(__name__)
+
+class PipelineOrchestrator:
+    def __init__(self, 
+                 repository: TaskRepository,
+                 nlp_service: NLPService = None,
+                 translation_service: TranslationService = None,
+                 animation_service: AnimationService = None,
+                 output_service: OutputService = None):
+        
+        self.repository = repository
+        self.nlp = nlp_service or NLPService()
+        self.translation = translation_service or TranslationService()
+        self.animation = animation_service or AnimationService()
+        self.output_handler = output_service or OutputService()
+
+    async def run(self, raw_text: str, user_id: str, input_type: str, file_metadata: dict = None) -> TextInputResponse:
+        logger.info(f"Orchestrator: Kicking off rigid AI Translation flow for User: {user_id}")
+        
+        nlp_result = await self.nlp.process(raw_text)
+        
+        translation_result = self.translation.translate(nlp_result)
+        
+        animation_package = self.animation.map(nlp_result.emotion_id, translation_result.asl_tokens)
+        
+        await self.repository.create_task(
+            user_id=user_id,
+            input_type=input_type,
+            raw_text=raw_text,
+            processed_text=nlp_result.processed_text,
+            emotion_id=nlp_result.emotion_id,
+            asl_grammar_output=translation_result.asl_grammar_output,
+            sentiment_animation_id=animation_package["sentiment_animation_id"],
+            gesture_animation_ids=animation_package["gesture_animation_ids"],
+            animation_sequence=animation_package["animation_sequence"],
+            file_metadata=file_metadata
+        )
+        
+        return self.output_handler.format_api_response(
+            processed_text=nlp_result.processed_text,
+            asl_grammar_output=translation_result.asl_grammar_output,
+            sentiment_animation_id=animation_package["sentiment_animation_id"],
+            gesture_animation_ids=animation_package["gesture_animation_ids"],
+            animation_sequence=animation_package["animation_sequence"]
+        )
+
+
