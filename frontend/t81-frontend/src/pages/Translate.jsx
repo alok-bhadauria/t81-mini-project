@@ -5,19 +5,18 @@ import { Keyboard, Mic, FileText, Send, Loader2, Volume2, User, Play, Square, Se
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { api } from "../services/api";
 
 export function Translate() {
     useDocumentTitle("App");
-    const { jwt, user, isLoggedIn } = useAuth();
+    const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
 
-    const [activeTab, setActiveTab] = useState('text');
+    const [activeTab, setActiveTab] = useState("text");
     const [inputText, setInputText] = useState("");
     const [isTranslating, setIsTranslating] = useState(false);
 
-    const [outputText, setOutputText] = useState("");
     const [outputAsl, setOutputAsl] = useState("");
-
     const [isListening, setIsListening] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
     const fileInputRef = useRef(null);
@@ -36,7 +35,7 @@ export function Translate() {
             return;
         }
 
-        if (!('webkitSpeechRecognition' in window)) {
+        if (!("webkitSpeechRecognition" in window)) {
             addToast({ title: "Speech Recognition Unavailable", description: "Your browser does not support Speech-to-Text.", type: "error" });
             return;
         }
@@ -44,7 +43,7 @@ export function Translate() {
         const recognition = new window.webkitSpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = "en-US";
 
         recognition.onstart = () => setIsListening(true);
         recognition.onresult = (event) => {
@@ -64,87 +63,101 @@ export function Translate() {
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        setSelectedFile(file);
 
-        if (file.name.endsWith('.txt')) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                setInputText(ev.target.result);
-                addToast({ title: "File Loaded", description: "Text extracted from " + file.name, type: "success" });
-                setActiveTab('text');
-            };
-            reader.readAsText(file);
-        } else {
-            addToast({ title: "File Selected", description: file.name + " ready for upload.", type: "info" });
-            setInputText(`[Document Uploaded: ${file.name}]`);
+        if (!file.name.endsWith(".txt")) {
+            addToast({ title: "Unsupported File", description: "Only .txt files can be processed. PDF and DOCX support coming soon.", type: "error" });
+            return;
         }
+
+        setSelectedFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const extracted = ev.target.result.slice(0, 2000);
+            setInputText(extracted);
+            addToast({ title: "File Loaded", description: "Text extracted from " + file.name, type: "success" });
+            setActiveTab("text");
+        };
+        reader.readAsText(file);
     };
 
     const handleTextSubmit = async () => {
         if (!inputText.trim()) return;
         setIsTranslating(true);
 
-        const payloadType = activeTab === 'document' ? 'DOCUMENT' : activeTab === 'speech' ? 'SPEECH' : 'TEXT';
-        const filename = selectedFile && activeTab === 'document' ? selectedFile.name : null;
+        const payloadType = activeTab === "document" ? "DOCUMENT" : activeTab === "speech" ? "SPEECH" : "TEXT";
+        const filename = selectedFile && activeTab === "document" ? selectedFile.name : null;
 
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/text`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify({
-                    text: inputText,
-                    type: payloadType,
-                    filename: filename
-                })
+            const data = await api.post("/text", {
+                text: inputText.trim(),
+                type: payloadType,
+                ...(filename && { filename }),
             });
 
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || "Translation failed");
-            }
-
-            const data = await response.json();
-
-            setOutputText(data.processed_text || inputText);
-            setOutputAsl(data.asl_grammar_output || "NO_ASL_DATA");
-            setAnimationSequence(data.animation_sequence || []);
+            const newSequence = data.animation_sequence || [];
+            setOutputAsl(data.asl_grammar_output || "");
+            setAnimationSequence(newSequence);
             setSentimentId(data.sentiment_animation_id || "sa003");
             setCurrentWordIndex(-1);
             setIsPlaying(false);
-            
+
             addToast({ title: "Translation successful", type: "success" });
 
+            if (newSequence.length > 0) {
+                setTimeout(() => {
+                    setIsPlaying(true);
+                    setCurrentWordIndex(0);
+                    let idx = 0;
+                    const step = () => {
+                        setCurrentWordIndex(idx);
+                        const item = newSequence[idx];
+                        const gestureCount = (item.gesture_animation_ids || []).length;
+                        const duration = Math.max(800, gestureCount * 1000);
+                        idx += 1;
+                        if (idx < newSequence.length) {
+                            setTimeout(step, duration);
+                        } else {
+                            setTimeout(() => {
+                                setCurrentWordIndex(-1);
+                                setIsPlaying(false);
+                            }, duration);
+                        }
+                    };
+                    step();
+                }, 300);
+            }
+
         } catch (error) {
-            addToast({ title: "Translation Error", description: error.message, type: "error" });
+            const msg = error.message === "SESSION_EXPIRED"
+                ? "Your session has expired. Please log in again."
+                : error.message;
+            addToast({ title: "Translation Error", description: msg, type: "error" });
         } finally {
             setIsTranslating(false);
         }
     };
-    
+
     const playAnimationSync = async () => {
         if (animationSequence.length === 0 || isPlaying) return;
         setIsPlaying(true);
         setCurrentWordIndex(0);
-        
+
         for (let i = 0; i < animationSequence.length; i++) {
             setCurrentWordIndex(i);
             const item = animationSequence[i];
-            
-            const playbackDuration = item.gesture_ids.length * 1000;
-            await new Promise(resolve => setTimeout(resolve, Math.max(800, playbackDuration)));
+            const gestureCount = (item.gesture_animation_ids || []).length;
+            const playbackDuration = gestureCount * 1000;
+            await new Promise((resolve) => setTimeout(resolve, Math.max(800, playbackDuration)));
         }
-        
+
         setCurrentWordIndex(-1);
         setIsPlaying(false);
     };
 
     const TABS = [
-        { id: 'text', label: 'Text Input', icon: Keyboard },
-        { id: 'speech', label: 'Speech', icon: Mic },
-        { id: 'document', label: 'Document', icon: FileText }
+        { id: "text", label: "Text Input", icon: Keyboard },
+        { id: "speech", label: "Speech", icon: Mic },
+        { id: "document", label: "Document", icon: FileText },
     ];
 
     if (!isLoggedIn) {
@@ -152,7 +165,7 @@ export function Translate() {
             <div className="flex flex-col items-center justify-center p-12 text-center">
                 <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">Authentication Required</h2>
                 <p className="text-[var(--text-secondary)] mb-6">Please log in to use the translation application.</p>
-                <Button onClick={() => window.location.href = '/login'}>Go to Login</Button>
+                <Button onClick={() => window.location.href = "/login"}>Go to Login</Button>
             </div>
         );
     }
@@ -183,7 +196,7 @@ export function Translate() {
                 <div className="flex-1 bg-[var(--bg-background)] relative overflow-hidden">
                     <div
                         className="absolute inset-0 flex transition-transform duration-500 ease-in-out"
-                        style={{ transform: `translateX(-${['text', 'speech', 'document'].indexOf(activeTab) * 100}%)` }}
+                        style={{ transform: `translateX(-${["text", "speech", "document"].indexOf(activeTab) * 100}%)` }}
                     >
                         <div className="w-full h-full flex-shrink-0 flex flex-col p-4 md:p-6">
                             <div className="relative flex-1 w-full">
@@ -225,7 +238,7 @@ export function Translate() {
                                 )}
                             </div>
                             <div className="flex items-center justify-between mt-4">
-                                <span className="text-xs text-[var(--text-secondary)]">{inputText.length} characters</span>
+                                <span className="text-xs text-[var(--text-secondary)]">{inputText.length} / 2000 characters</span>
                                 <Button
                                     onClick={handleTextSubmit}
                                     disabled={!inputText.trim() || isTranslating}
@@ -240,7 +253,7 @@ export function Translate() {
                             <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
                                 <div
                                     onClick={toggleListening}
-                                    className={`w-24 h-24 rounded-full flex items-center justify-center relative cursor-pointer transition-colors shadow-lg ${isListening ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20' : 'bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/20'}`}
+                                    className={`w-24 h-24 rounded-full flex items-center justify-center relative cursor-pointer transition-colors shadow-lg ${isListening ? "bg-red-500/10 text-red-500 hover:bg-red-500/20" : "bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/20"}`}
                                 >
                                     <Mic size={40} className={isListening ? "animate-pulse" : ""} />
                                     {isListening && <div className="absolute inset-0 rounded-full border border-red-500 animate-ping opacity-20"></div>}
@@ -257,7 +270,7 @@ export function Translate() {
                                 />
                                 <div className="flex gap-4">
                                     <Button variant="outline" onClick={toggleListening} className="rounded-full px-6">{isListening ? "Stop" : "Start"} Recording</Button>
-                                    <Button onClick={() => setActiveTab('text')} className="rounded-full px-6">Review & Translate</Button>
+                                    <Button onClick={() => setActiveTab("text")} className="rounded-full px-6">Review & Translate</Button>
                                 </div>
                             </div>
                         </div>
@@ -268,7 +281,7 @@ export function Translate() {
                                 ref={fileInputRef}
                                 onChange={handleFileChange}
                                 className="hidden"
-                                accept=".txt,.pdf,.docx"
+                                accept=".txt"
                             />
                             <Card
                                 onClick={() => fileInputRef.current?.click()}
@@ -278,7 +291,7 @@ export function Translate() {
                                     <Upload size={28} />
                                 </div>
                                 <h3 className="text-lg font-bold">Upload a Document</h3>
-                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">PDF, DOCX, or TXT files supported.</p>
+                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">TXT files supported. Text is extracted client-side.</p>
                                 <Button size="sm" type="button" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>Select File</Button>
                                 {selectedFile && (
                                     <div className="flex items-center gap-2 mt-4 bg-[var(--bg-surface)] px-4 py-2 border border-[var(--border-color)] rounded-lg shadow-sm">
@@ -308,7 +321,7 @@ export function Translate() {
                     <div className="text-zinc-500 dark:text-zinc-600 flex flex-col items-center">
                         <User size={64} className="mb-4" />
                         <p className="text-xl font-mono opacity-50">{isPlaying ? "Avatar Sync Active" : "3D Avatar Core Offline"}</p>
-                        
+
                         {isPlaying && currentWordIndex >= 0 && animationSequence[currentWordIndex] && (
                             <div className="mt-4 flex flex-col items-center animate-in fade-in zoom-in duration-300">
                                 <span className="text-sm font-bold text-[var(--primary)]">Rendering 3D Gestures & Sentiments:</span>
@@ -318,7 +331,7 @@ export function Translate() {
                                             {sentimentId}
                                         </span>
                                     )}
-                                    {animationSequence[currentWordIndex].gesture_ids.map((gid, i) => (
+                                    {(animationSequence[currentWordIndex].gesture_animation_ids || []).map((gid, i) => (
                                         <span key={i} className="px-3 py-1.5 bg-[var(--primary)]/10 border border-[var(--primary)]/30 text-[var(--primary)] font-mono rounded-md shadow-sm text-sm">
                                             {gid}
                                         </span>
@@ -338,12 +351,12 @@ export function Translate() {
                     </div>
 
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-black/50 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => {setIsPlaying(false); setCurrentWordIndex(-1);}}><Square size={18} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => { setIsPlaying(false); setCurrentWordIndex(-1); }}><Square size={18} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
                         <button className="text-white hover:text-[var(--primary)] transition-colors scale-125" onClick={playAnimationSync}><Play size={24} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
                         <div className="w-32 h-1 bg-white/20 rounded-full cursor-pointer overflow-hidden">
-                            <div 
+                            <div
                                 className="h-full bg-[var(--primary)] transition-all duration-300 relative"
                                 style={{ width: `${animationSequence.length > 0 && currentWordIndex >= 0 ? ((currentWordIndex + 1) / animationSequence.length) * 100 : 0}%` }}
                             >
@@ -359,40 +372,37 @@ export function Translate() {
                             Synced Output
                         </span>
                     </div>
-                    
+
                     {animationSequence.length > 0 ? (
                         <div className="flex flex-col h-full space-y-4">
                             <div className="flex-1 p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner relative flex items-center justify-center overflow-x-hidden min-h-[140px]">
-                                
                                 <div className="flex gap-6 items-center flex-nowrap w-full overflow-hidden justify-center relative px-8 mask-edges">
                                     {animationSequence.map((item, index) => {
                                         const isCurrent = currentWordIndex === index;
                                         const distance = Math.abs(currentWordIndex === -1 ? 0 : currentWordIndex - index);
-                                        
+
                                         if (currentWordIndex !== -1 && distance > 5) return null;
-                                        
+
                                         return (
-                                            <span 
-                                                key={index} 
-                                                className={`font-mono transition-all duration-300 select-none ${
-                                                    isCurrent 
-                                                        ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10" 
-                                                        : currentWordIndex === -1
-                                                            ? "text-[var(--text-secondary)] text-lg"
-                                                            : `text-[var(--text-secondary)] font-medium ${distance > 2 ? 'opacity-20 text-sm' : 'opacity-60 text-lg'} blur-[0.5px]`
-                                                }`}
+                                            <span
+                                                key={index}
+                                                className={`font-mono transition-all duration-300 select-none ${isCurrent
+                                                    ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10"
+                                                    : currentWordIndex === -1
+                                                        ? "text-[var(--text-secondary)] text-lg"
+                                                        : `text-[var(--text-secondary)] font-medium ${distance > 2 ? "opacity-20 text-sm" : "opacity-60 text-lg"} blur-[0.5px]`
+                                                    }`}
                                             >
                                                 {item.word}
                                             </span>
                                         );
                                     })}
                                 </div>
-                                
                             </div>
-                            
+
                             <div className="flex items-center justify-end shrink-0 w-full mt-4">
                                 <Button size="sm" onClick={playAnimationSync} disabled={isPlaying} className="rounded-full shadow-lg shrink-0">
-                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2"/> : <Play fill="currentColor" size={14} className="mr-2"/>}
+                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2" /> : <Play fill="currentColor" size={14} className="mr-2" />}
                                     {isPlaying ? "Playing..." : "Play Sync"}
                                 </Button>
                             </div>

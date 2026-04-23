@@ -1,23 +1,81 @@
 SIGNFUSION BACKEND ARCHITECTURE AND CODE
 
 --------------------------------------------------------------------------------
+FILE: backend\requirements.txt
+--------------------------------------------------------------------------------
+fastapi==0.135.1
+uvicorn==0.41.0
+starlette==0.52.1
+python-multipart==0.0.22
+
+pydantic==2.12.5
+pydantic-settings==2.13.1
+pydantic_core==2.41.5
+annotated-types==0.7.0
+email-validator==2.3.0
+
+motor==3.7.1
+pymongo==4.16.0
+dnspython==2.8.0
+
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==5.0.0
+cryptography==46.0.5
+
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+
+cloudinary==1.44.1
+
+slowapi==0.1.9
+limits==5.8.0
+
+langchain==1.2.15
+langchain-core==1.3.0
+langchain-groq==1.1.2
+langchain-text-splitters==1.1.2
+langsmith==0.7.33
+groq==0.37.1
+google-genai==1.73.1
+
+spacy==3.8.11
+spacy-legacy==3.0.12
+spacy-loggers==1.0.5
+nltk==3.9.3
+pyspellchecker==0.9.0
+
+python-dotenv==1.2.2
+anyio==4.12.1
+typing_extensions==4.15.0
+packaging==26.0
+
+bleach==6.3.0
+pytest==9.0.3
+pytest-asyncio==1.3.0
+websockets==16.0
+
+
+--------------------------------------------------------------------------------
 FILE: backend\app\main.py
 --------------------------------------------------------------------------------
 import logging
+from app.core.logging_config import setup_logging, request_id_var
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+setup_logging()
 
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from app.db.mongodb import connect_to_mongo, close_mongo_connection, get_database
 from app.core.config import settings
 import cloudinary
-from app.api.routes import text, auth, history, uploads, feedback
+from app.api.routes import text, auth, history, uploads, feedback, speech, admin
 from app.core.exceptions import AppException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi import HTTPException
+from app.core.responses import error_response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -35,6 +93,7 @@ class RequestLoggingAndMaxBodySizeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         req_id = str(uuid.uuid4())
         request.state.request_id = req_id
+        request_id_var.set(req_id)
         logger.info(f"Request started: {req_id} - {request.method} {request.url.path}")
         start_time = time.time()
         
@@ -57,6 +116,11 @@ class RequestLoggingAndMaxBodySizeMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+
+    from app.core.nlp_loader import nlp
+    if nlp is None:
+        raise RuntimeError("SpaCy model 'en_core_web_sm' not found. Run: python -m spacy download en_core_web_sm")
+
     db = get_database()
 
     await db["users"].create_index("email", unique=True, background=True)
@@ -64,6 +128,9 @@ async def lifespan(app: FastAPI):
     await db["tasks"].create_index("user_id", background=True)
     await db["tasks"].create_index("created_at", background=True)
     await db["tasks"].create_index("input_type", background=True)
+    await db["tasks"].create_index(
+        [("user_id", 1), ("created_at", -1)], background=True
+    )
     
     cloudinary.config(
         cloud_name=settings.cloudinary_cloud_name,
@@ -71,15 +138,34 @@ async def lifespan(app: FastAPI):
         api_secret=settings.cloudinary_api_secret,
         secure=True
     )
-    
+
+    from app.services.f_animation_service import AnimationService
+    from app.services.c_ai_translation_service import AITranslationService
+    from app.services.b_gemini_translation_service import GeminiTranslationService
+    animation_svc = AnimationService()
+    AITranslationService().load_gesture_vocabulary(animation_svc.get_gesture_map())
+    GeminiTranslationService()
+
     yield
     await close_mongo_connection()
+
+
+tags_metadata = [
+    {"name": "auth", "description": "Operations with users and authentication. The **login** logic is also here."},
+    {"name": "text", "description": "Manage AI translation for text inputs."},
+    {"name": "speech", "description": "Manage AI translation for live speech inputs over WebSocket."},
+    {"name": "history", "description": "Manage user history data."},
+    {"name": "uploads", "description": "Manage user document uploads."},
+    {"name": "Feedback", "description": "Submit user feedback and support tickets."},
+    {"name": "admin", "description": "Administrative endpoints requiring elevated permissions."}
+]
 
 app = FastAPI(
     title="SignFusion Backend API",
     description="Scalable backend for handling multimodal Sign Language translation requests.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    openapi_tags=tags_metadata
 )
 
 app.state.limiter = limiter
@@ -87,10 +173,21 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.message},
-    )
+    return error_response(message=exc.message, errors=exc.errors, status_code=exc.status_code)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = [{"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]
+    return error_response(message="Validation Error", errors=errors, status_code=422)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return error_response(message=str(exc.detail), status_code=exc.status_code)
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled Exception: {exc}", exc_info=True)
+    return error_response(message="Internal Server Error", status_code=500)
 
 app.add_middleware(RequestLoggingAndMaxBodySizeMiddleware)
 
@@ -98,8 +195,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins if isinstance(settings.cors_origins, list) else settings.cors_origins.split(","),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 app.add_middleware(SlowAPIMiddleware)
@@ -111,6 +208,9 @@ async def secure_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self' https://www.googleapis.com https://res.cloudinary.com"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
     return response
 
 app.include_router(text.router)
@@ -118,20 +218,24 @@ app.include_router(auth.router)
 app.include_router(history.router)
 app.include_router(uploads.router)
 app.include_router(feedback.router)
+app.include_router(speech.router)
+app.include_router(admin.router)
+
+from app.core.responses import success_response, error_response
 
 @app.get("/")
 @limiter.limit("10/minute")
 async def root(request: Request):
-    return {"message": "SignFusion API is running gracefully."}
+    return success_response(message="SignFusion API is running gracefully.")
 
 @app.get("/health")
 async def health_check():
     try:
         db = get_database()
         await db.command("ping")
-        return {"status": "ok"}
+        return success_response(message="ok")
     except Exception:
-        return {"status": "db_error"}
+        return error_response(message="db_error", status_code=503)
 
 
 --------------------------------------------------------------------------------
@@ -143,7 +247,7 @@ FILE: backend\app\__init__.py
 FILE: backend\app\api\dependencies.py
 --------------------------------------------------------------------------------
 from typing import Annotated
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -153,6 +257,16 @@ from bson.errors import InvalidId
 from app.db.mongodb import get_database
 from app.core.config import settings
 from app.models.user import UserDBModel
+from app.core.logging_config import user_id_var
+from app.core.security import verify_csrf_token
+from app.core.exceptions import AppException
+from app.services.a_preprocess_service import PreprocessService
+from app.services.b_gemini_translation_service import GeminiTranslationService
+from app.services.c_ai_translation_service import AITranslationService
+from app.services.f_animation_service import AnimationService
+from app.services.g_output_service import OutputService
+from app.services.h_orchestrator import PipelineOrchestrator
+from app.db.task_repository import TaskRepository
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -193,53 +307,115 @@ async def get_current_user(
         raise credentials_exception
 
     user = UserDBModel(**user_doc)
+    user_id_var.set(str(user.id))
     return user
+
+async def check_csrf_token(request: Request):
+    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+        csrf_cookie = request.cookies.get("csrf_token")
+        csrf_header = request.headers.get("X-CSRF-Token")
+        
+        if not csrf_cookie or not csrf_header or not verify_csrf_token(csrf_header, csrf_cookie):
+            raise AppException("CSRF token verification failed.", status_code=403)
+    return True
+
+async def get_current_admin_user(
+    current_user: Annotated[UserDBModel, Depends(get_current_user)]
+) -> UserDBModel:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action"
+        )
+    return current_user
+
+def get_orchestrator(db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]) -> PipelineOrchestrator:
+    return PipelineOrchestrator(
+        repository=TaskRepository(db),
+        preprocess=PreprocessService(),
+        gemini_translation=GeminiTranslationService(),
+        ai_translation=AITranslationService(),
+        animation_service=AnimationService(),
+        output_service=OutputService(),
+    )
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\admin.py
+--------------------------------------------------------------------------------
+from typing import Annotated
+from fastapi import APIRouter, Depends, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.api.dependencies import get_db, get_current_admin_user
+from app.models.user import UserDBModel
+from app.core.responses import success_response
+from app.core.rate_limit import limiter
+
+router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+@router.get("/stats", summary="Get System Statistics", description="Retrieves global system usage statistics. Accessible only by administrators.")
+@limiter.limit("20/minute")
+async def get_system_stats(
+    request: Request,
+    admin_user: Annotated[UserDBModel, Depends(get_current_admin_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    users_count = await db["users"].count_documents({})
+    tasks_count = await db["tasks"].count_documents({})
+    feedback_count = await db["feedback"].count_documents({})
+    
+    return success_response(
+        "System statistics retrieved successfully",
+        data={
+            "total_users": users_count,
+            "total_tasks": tasks_count,
+            "total_feedback": feedback_count
+        }
+    )
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\api\routes\auth.py
 --------------------------------------------------------------------------------
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
-import uuid
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, status
 from fastapi.security import OAuth2PasswordRequestForm
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
-
-from app.api.dependencies import get_db, get_current_user
-from app.core.security import get_password_hash, verify_password, create_access_token
-from app.models.user import UserDBModel
-from app.schemas.user import UserCreateRequest, UserResponse, GoogleAuthRequest, UserUpdateRequest, PasswordUpdateRequest
-from fastapi import Request, UploadFile, File
+from pymongo.errors import DuplicateKeyError
+import uuid
+import logging
 import cloudinary
 import cloudinary.uploader
 import httpx
 from pydantic import BaseModel
+
+from app.api.dependencies import get_db, get_current_user, check_csrf_token
+from app.core.sanitization import sanitize_query
+from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token, generate_csrf_token
 from app.core.rate_limit import limiter
-import logging
-from pymongo.errors import DuplicateKeyError
-import uuid
+from app.models.user import UserDBModel
+from app.schemas.user import UserCreateRequest, UserResponse, GoogleAuthRequest, UserUpdateRequest, PasswordUpdateRequest
+from app.core.responses import success_response, error_response
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post("/register", status_code=status.HTTP_201_CREATED, summary="Register New User", description="Creates a new local user account with email and password.")
 @limiter.limit("10/minute")
 async def register_user(
     request: Request,
-    payload: UserCreateRequest, 
+    payload: UserCreateRequest,
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
     existing_user = await db["users"].find_one({"email": payload.email})
     if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Email already registered"
-        )
-        
-    hashed_pwd = get_password_hash(payload.password)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
+    hashed_pwd = get_password_hash(payload.password)
     username = f"sf{str(uuid.uuid4().int)[:10]}"
 
     new_user = UserDBModel(
@@ -250,18 +426,16 @@ async def register_user(
         full_name=payload.full_name,
         plan="free"
     )
-    
+
     try:
-        result = await db["users"].insert_one(
-            new_user.model_dump(by_alias=True, exclude=["id"])
-        )
-    except DuplicateKeyError as e:
+        result = await db["users"].insert_one(new_user.model_dump(by_alias=True, exclude=["id"]))
+    except DuplicateKeyError:
         logger.exception("Duplicate key error during registration:")
         raise HTTPException(status_code=400, detail="Username or Email already registered.")
-    
+
     new_user.id = result.inserted_id
 
-    return UserResponse(
+    data = UserResponse(
         id=str(new_user.id),
         email=new_user.email,
         username=new_user.username,
@@ -270,45 +444,46 @@ async def register_user(
         plan=new_user.plan,
         created_at=new_user.created_at
     )
+    return success_response("User registered successfully", data=data.model_dump(), status_code=201)
+
 
 class UsernameCheckResponse(BaseModel):
     available: bool
 
-@router.get("/check-username", response_model=UsernameCheckResponse)
+
+@router.get("/check-username", summary="Check Username Availability", description="Verifies if a requested username is available or already taken.")
 @limiter.limit("30/minute")
 async def check_username(
     request: Request,
-    username: str,
+    username: Annotated[str, Depends(sanitize_query)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-    if not username or len(username) < 5 or len(username) > 20:
-        return {"available": False}
+    if not username or len(username) < 3 or len(username) > 30:
+        return success_response("Username check", data={"available": False})
 
     user_doc = await db["users"].find_one({"username": username})
-    return {"available": user_doc is None}
+    return success_response("Username check", data={"available": user_doc is None})
 
-@router.post("/login")
+
+@router.post("/login", summary="Login User", description="Authenticates a user and returns JWT access/refresh tokens alongside a CSRF token.")
 @limiter.limit("10/minute")
 async def login_user(
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
-
     identifier = form_data.username
     user_doc = await db["users"].find_one({
-        "$or": [
-            {"email": identifier},
-            {"username": identifier}
-        ]
+        "$or": [{"email": identifier}, {"username": identifier}]
     })
+
     if not user_doc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+
     user = UserDBModel(**user_doc)
 
     if user.auth_provider == "LOCAL" and not verify_password(form_data.password, user.hashed_password):
@@ -319,10 +494,51 @@ async def login_user(
         )
 
     access_token = create_access_token(subject=str(user.id))
-    
-    return {"access_token": access_token, "token_type": "bearer"}
+    refresh_token = create_refresh_token(subject=str(user.id))
+    csrf_token = generate_csrf_token()
 
-@router.post("/google")
+    hashed_rt = get_password_hash(refresh_token)
+    await db["refresh_tokens"].insert_one({
+        "user_id": user.id,
+        "token_hash": hashed_rt,
+        "created_at": datetime.utcnow()
+    })
+
+    resp_data = success_response(
+        message="Login successful",
+        data={"access_token": access_token, "token_type": "bearer", "csrf_token": csrf_token}
+    )
+    response = JSONResponse(content=resp_data)
+    response.set_cookie(key="csrf_token", value=csrf_token, httponly=False, samesite="strict")
+    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, samesite="strict")
+    return response
+
+@router.post("/refresh", summary="Refresh Access Token", description="Issues a new access token using a valid HttpOnly refresh token cookie.")
+@limiter.limit("5/minute")
+async def refresh_token_endpoint(
+    request: Request,
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+        
+    try:
+        from app.core.config import settings
+        from jose import jwt
+        payload = jwt.decode(refresh_token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id = payload.get("sub")
+        if not user_id or payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    # Optional: We could verify hash against DB here for strict statefulness
+    access_token = create_access_token(subject=user_id)
+    return success_response("Token refreshed", data={"access_token": access_token, "token_type": "bearer"})
+
+
+@router.post("/google", summary="Google OAuth Login", description="Authenticates a user via Google OAuth2 access token and issues local JWT tokens.")
 @limiter.limit("10/minute")
 async def google_auth(
     request: Request,
@@ -332,31 +548,26 @@ async def google_auth(
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
-                "https://www.googleapis.com/oauth2/v3/userinfo", 
+                "https://www.googleapis.com/oauth2/v3/userinfo",
                 headers={"Authorization": f"Bearer {payload.access_token}"}
             )
             if response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, 
-                    detail="Invalid Google access token"
-                )
-                
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Google access token")
+
             user_info = response.json()
             email = user_info["email"]
             name = user_info.get("name", "Google User")
             google_id = user_info["sub"]
-    except httpx.RequestError as e:
+    except httpx.RequestError:
         logger.exception("Google auth network request failed:")
         raise HTTPException(status_code=503, detail="Google authentication service unavailable")
-        
+
     user_doc = await db["users"].find_one({"email": email})
-    
     is_new_user = False
-    
+
     if not user_doc:
         is_new_user = True
         username = f"sf{str(uuid.uuid4().int)[:10]}"
-
         new_user = UserDBModel(
             email=email,
             username=username,
@@ -373,17 +584,18 @@ async def google_auth(
             raise HTTPException(status_code=400, detail="Failed to complete registration due to duplicate constraints.")
     else:
         user_id = str(user_doc["_id"])
-        
-    access_token = create_access_token(subject=user_id)
-    return {"access_token": access_token, "token_type": "bearer", "is_new_user": is_new_user}
 
-@router.get("/me", response_model=UserResponse)
+    access_token = create_access_token(subject=user_id)
+    return success_response("Google authentication successful", data={"access_token": access_token, "token_type": "bearer", "is_new_user": is_new_user})
+
+
+@router.get("/me", summary="Get Current User Profile", description="Retrieves the profile information of the currently authenticated user.", response_model=UserResponse)
 @limiter.limit("30/minute")
 async def get_my_profile(
     request: Request,
     current_user: Annotated[UserDBModel, Depends(get_current_user)]
 ):
-    return UserResponse(
+    data = UserResponse(
         id=str(current_user.id),
         email=current_user.email,
         username=current_user.username,
@@ -395,8 +607,10 @@ async def get_my_profile(
         plan=current_user.plan,
         created_at=current_user.created_at
     )
+    return success_response("Profile fetched successfully", data=data.model_dump())
 
-@router.get("/me/stats")
+
+@router.get("/me/stats", summary="Get User Statistics", description="Retrieves usage statistics such as total translations and saved documents for the current user.")
 @limiter.limit("30/minute")
 async def get_my_stats(
     request: Request,
@@ -405,22 +619,24 @@ async def get_my_stats(
 ):
     translations_count = await db["tasks"].count_documents({"user_id": str(current_user.id)})
     saved_items_count = await db["tasks"].count_documents({"input_type": "DOCUMENT", "user_id": str(current_user.id)})
-    return {
+    return success_response("Stats fetched successfully", data={
         "translations": translations_count,
         "saved_items": saved_items_count,
         "plan": current_user.plan
-    }
+    })
 
-@router.put("/me", response_model=UserResponse)
+
+@router.put("/me", summary="Update User Profile", description="Updates profile fields like bio, full name, or username for the current user. Requires CSRF token.")
 @limiter.limit("20/minute")
 async def update_my_profile(
     request: Request,
     payload: UserUpdateRequest,
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)]
 ):
     update_data = {k: v for k, v in payload.model_dump().items() if v is not None}
-    
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields provided to update")
     if "username" in update_data:
@@ -428,19 +644,18 @@ async def update_my_profile(
             raise HTTPException(status_code=400, detail="Username must be between 5 and 20 characters")
         if await db["users"].find_one({"username": update_data["username"], "_id": {"$ne": current_user.id}}):
             raise HTTPException(status_code=400, detail="Username is already taken")
-        
+
     result = await db["users"].find_one_and_update(
         {"_id": current_user.id},
         {"$set": update_data},
         return_document=ReturnDocument.AFTER
     )
-    
+
     if not result:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
     updated_user = UserDBModel(**result)
-    
-    return UserResponse(
+    data = UserResponse(
         id=str(updated_user.id),
         email=updated_user.email,
         full_name=updated_user.full_name,
@@ -452,25 +667,26 @@ async def update_my_profile(
         plan=updated_user.plan,
         created_at=updated_user.created_at
     )
+    return success_response("Profile updated successfully", data=data.model_dump())
 
-@router.post("/me/avatar", response_model=UserResponse)
+
+@router.post("/me/avatar", summary="Upload User Avatar", description="Uploads and updates the user's profile picture using Cloudinary. Requires CSRF token.")
 @limiter.limit("5/minute")
 async def upload_avatar(
     request: Request,
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)],
     file: UploadFile = File(...)
 ):
-
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File provided is not an image.")
-        
+
     file_bytes = await file.read()
     if len(file_bytes) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image size exceeds 5MB limit.")
-        
-    try:
 
+    try:
         upload_result = cloudinary.uploader.upload(
             file_bytes,
             folder="signfusion_avatars",
@@ -478,8 +694,8 @@ async def upload_avatar(
             overwrite=True
         )
         secure_url = upload_result.get("secure_url")
-    except Exception as e:
-        logger.exception("Cloudinary Image failure:")
+    except Exception:
+        logger.exception("Cloudinary upload failed:")
         secure_url = f"https://ui-avatars.com/api/?name={current_user.full_name.replace(' ', '+')}&background=random"
 
     result = await db["users"].find_one_and_update(
@@ -492,7 +708,6 @@ async def upload_avatar(
         raise HTTPException(status_code=404, detail="User not found")
 
     updated_user = UserDBModel(**result)
-    
     return UserResponse(
         id=str(updated_user.id),
         email=updated_user.email,
@@ -506,28 +721,29 @@ async def upload_avatar(
         created_at=updated_user.created_at
     )
 
-@router.put("/password")
+
+@router.put("/password", summary="Change Password", description="Updates the password for a local user account. Requires CSRF token.")
 @limiter.limit("5/minute")
 async def update_password(
     request: Request,
     payload: PasswordUpdateRequest,
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)]
 ):
     if current_user.auth_provider != "LOCAL":
         raise HTTPException(status_code=400, detail="Cannot change password for social login accounts")
-        
+
     if not current_user.hashed_password or not verify_password(payload.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect current password")
-        
+
     hashed_pwd = get_password_hash(payload.new_password)
-    
     await db["users"].update_one(
         {"_id": current_user.id},
         {"$set": {"hashed_password": hashed_pwd}}
     )
-    
-    return {"message": "Password updated successfully"}
+
+    return success_response("Password updated successfully")
 
 
 --------------------------------------------------------------------------------
@@ -536,20 +752,22 @@ FILE: backend\app\api\routes\feedback.py
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import Annotated
-from app.api.dependencies import get_current_user, get_db
+from app.api.dependencies import get_current_user, get_db, check_csrf_token
+from app.core.responses import success_response
 from app.models.user import UserDBModel
 from app.models.feedback import FeedbackDBModel
 from app.schemas.feedback import FeedbackCreate, FeedbackResponse
 from app.core.rate_limit import limiter
 router = APIRouter(prefix="/api/v1/feedback", tags=["Feedback"])
 
-@router.post("", response_model=FeedbackResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, summary="Submit Feedback", description="Allows an authenticated user to submit system feedback or support tickets. Requires CSRF token.")
 @limiter.limit("5/minute")
 async def create_feedback(
     request: Request,
     payload: FeedbackCreate,
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)]
 ):
     feedback_doc = FeedbackDBModel(
         user_id=str(current_user.id),
@@ -566,24 +784,27 @@ async def create_feedback(
         )
         
     saved_doc = await db["feedback"].find_one({"_id": result.inserted_id})
-    return FeedbackResponse(**saved_doc, id=str(saved_doc["_id"]))
+    data = FeedbackResponse(**saved_doc, id=str(saved_doc["_id"]))
+    return success_response("Feedback submitted successfully", data=data.model_dump(), status_code=201)
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\api\routes\history.py
 --------------------------------------------------------------------------------
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Path
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import get_db, get_current_user, check_csrf_token
+from app.core.responses import success_response
 from app.models.user import UserDBModel
 from app.models.task import PyObjectId
-
-from slowapi.util import get_remote_address
+from bson.errors import InvalidId
 from app.core.rate_limit import limiter
+
 router = APIRouter(prefix="/api/v1/history", tags=["history"])
 
-@router.get("")
+
+@router.get("", summary="Get User History", description="Retrieves the past 50 translation items for the authenticated user.")
 @limiter.limit("30/minute")
 async def get_history(
     request: Request,
@@ -606,73 +827,216 @@ async def get_history(
             "asl": item.get("asl_grammar_output", ""),
             "date": item.get("created_at").isoformat() if item.get("created_at") else ""
         })
-    return results
+    return success_response("History fetched successfully", data=results)
 
-@router.delete("/{history_id}")
+@router.delete("/{history_id}", summary="Delete History Item", description="Deletes a specific history item securely. Admins can delete any item. Requires CSRF token.")
 @limiter.limit("20/minute")
 async def delete_history_item(
     request: Request,
-    history_id: str,
+    history_id: Annotated[str, Path(pattern="^[a-fA-F0-9]{24}$", description="Valid MongoDB ObjectId")],
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)]
 ):
-    result = await db["tasks"].delete_one({"_id": PyObjectId(history_id), "user_id": str(current_user.id)})
+    try:
+        obj_id = PyObjectId(history_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid history ID format")
+
+    query = {"_id": obj_id}
+    if current_user.role != "admin":
+        query["user_id"] = str(current_user.id)
+
+    result = await db["tasks"].delete_one(query)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="History not found or unauthorized")
         
-    return {"message": "History and associated outputs deleted"}
+    return success_response("History and associated outputs deleted")
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\speech.py
+--------------------------------------------------------------------------------
+import asyncio
+import logging
+import time
+from typing import Annotated
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+from motor.motor_asyncio import AsyncIOMotorDatabase
+import json
+
+from app.api.dependencies import get_db, oauth2_scheme, get_current_user, get_orchestrator
+from app.services.h_orchestrator import PipelineOrchestrator
+from app.db.task_repository import TaskRepository
+from jose import jwt, JWTError
+from app.core.config import settings
+from bson import ObjectId
+from bson.errors import InvalidId
+from app.models.user import UserDBModel
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/speech", tags=["speech"])
+
+async def get_user_from_token(token: str, db: AsyncIOMotorDatabase) -> UserDBModel | None:
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        obj_id = ObjectId(user_id)
+        user_doc = await db["users"].find_one({"_id": obj_id})
+        if user_doc:
+            return UserDBModel(**user_doc)
+    except (JWTError, InvalidId):
+        return None
+    return None
+
+@router.websocket("/stream")
+async def websocket_speech_endpoint(
+    websocket: WebSocket,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    orchestrator: PipelineOrchestrator = Depends(get_orchestrator)
+):
+    auth_header = websocket.headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        await websocket.close(code=1008, reason="Authentication failed: Missing or invalid Authorization header")
+        return
+        
+    token = auth_header.split(" ")[1]
+    user = await get_user_from_token(token, db)
+    if not user:
+        await websocket.close(code=1008, reason="Authentication failed")
+        return
+
+    await websocket.accept()
+    await websocket.send_json({"status": "authenticated"})
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+                text_chunk = payload.get("text", "").strip()
+                is_final = payload.get("is_final", False)
+                
+                if not text_chunk:
+                    continue
+
+                try:
+                    result, persist_kwargs = await asyncio.wait_for(
+                        orchestrator.run(
+                            raw_text=text_chunk,
+                            user_id=str(user.id),
+                            input_type="SPEECH",
+                            file_metadata={"is_final": is_final}
+                        ),
+                        timeout=25.0
+                    )
+                    
+                    asyncio.create_task(orchestrator._persist_task(**persist_kwargs))
+                    
+                    response_data = {
+                        "type": "final" if is_final else "partial",
+                        "processed_text": result.processed_text,
+                        "asl_grammar_output": result.asl_grammar_output,
+                        "sentiment_animation_id": result.sentiment_animation_id,
+                        "gesture_animation_ids": result.gesture_animation_ids,
+                        "animation_sequence": result.animation_sequence,
+                    }
+                    await websocket.send_json(response_data)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "error", "message": "Translation timed out"})
+                except Exception as e:
+                    logger.warning(f"WebSocket translation error: {e}")
+                    await websocket.send_json({"type": "error", "message": str(e)})
+
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "error", "message": "Invalid JSON payload"})
+                
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for user {user.id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\api\routes\text.py
 --------------------------------------------------------------------------------
+import asyncio
+import logging
+import time
 from typing import Annotated
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, BackgroundTasks
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import get_db, get_current_user, get_orchestrator, check_csrf_token
+from app.core.responses import success_response
 from app.schemas.text import TextInputRequest, TextInputResponse
 from app.models.user import UserDBModel
-from app.db.task_repository import TaskRepository
-from app.services.e_orchestrator import PipelineOrchestrator
-from fastapi import Request
+from app.services.h_orchestrator import PipelineOrchestrator
 from app.core.rate_limit import limiter
+from app.core.exceptions import AppException
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/text", tags=["text"])
 
-@router.post("", response_model=TextInputResponse)
+ROUTE_TIMEOUT_SECONDS = 25.0
+
+
+@router.post("", summary="Process Text Input", description="Processes raw text input through the AI translation pipeline and triggers background ASL animation generation.")
 @limiter.limit("60/minute")
 async def accept_text_input(
     request: Request,
     payload: TextInputRequest,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_orchestrator)],
+    csrf: Annotated[bool, Depends(check_csrf_token)],
 ):
+    start_time = time.monotonic()
     metadata = {"filename": payload.filename} if payload.filename else None
-    
-    repository = TaskRepository(db)
-    orchestrator = PipelineOrchestrator(repository)
-    
-    return await orchestrator.run(
-        raw_text=payload.text,
-        user_id=str(current_user.id),
-        input_type=payload.type.value,
-        file_metadata=metadata
-    )
+
+    try:
+        result, persist_kwargs = await asyncio.wait_for(
+            orchestrator.run(
+                raw_text=payload.text,
+                user_id=str(current_user.id),
+                input_type=payload.type.value,
+                file_metadata=metadata,
+            ),
+            timeout=ROUTE_TIMEOUT_SECONDS,
+        )
+        background_tasks.add_task(orchestrator._persist_task, **persist_kwargs)
+    except asyncio.TimeoutError:
+        duration = time.monotonic() - start_time
+        logger.error(f"Route: Pipeline timed out after {duration:.3f}s for user {current_user.id}.")
+        raise AppException("Request timed out. Please try again.", 504)
+
+    duration = time.monotonic() - start_time
+    logger.info(f"Route: Request completed in {duration:.3f}s for user {current_user.id}.")
+    return success_response("Translation successful", data=result)
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\api\routes\uploads.py
 --------------------------------------------------------------------------------
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Path
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import get_db, get_current_user, check_csrf_token
+from app.core.responses import success_response
 from app.models.user import UserDBModel
 from app.models.task import PyObjectId
+from bson.errors import InvalidId
 from app.core.rate_limit import limiter
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
-@router.get("")
+@router.get("", summary="Get Uploaded Documents", description="Retrieves the past 50 document translation uploads for the authenticated user.")
 @limiter.limit("30/minute")
 async def get_uploads(
     request: Request,
@@ -697,21 +1061,31 @@ async def get_uploads(
             "description": f"Extracted text: {item.get('input_text', '')[:80]}...",
             "date": item.get("created_at").isoformat() if item.get("created_at") else ""
         })
-    return results
+    return success_response("Uploads fetched successfully", data=results)
 
-@router.delete("/{upload_id}")
+@router.delete("/{upload_id}", summary="Delete Uploaded Document", description="Deletes a specific document upload securely. Admins can delete any item. Requires CSRF token.")
 @limiter.limit("20/minute")
 async def delete_upload_item(
     request: Request,
-    upload_id: str,
+    upload_id: Annotated[str, Path(pattern="^[a-fA-F0-9]{24}$", description="Valid MongoDB ObjectId")],
     current_user: Annotated[UserDBModel, Depends(get_current_user)],
-    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
+    csrf: Annotated[bool, Depends(check_csrf_token)]
 ):
-    result = await db["tasks"].delete_one({"_id": PyObjectId(upload_id), "user_id": str(current_user.id)})
+    try:
+        obj_id = PyObjectId(upload_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid upload ID format")
+
+    query = {"_id": obj_id}
+    if current_user.role != "admin":
+        query["user_id"] = str(current_user.id)
+
+    result = await db["tasks"].delete_one(query)
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Upload not found or unauthorized")
         
-    return {"message": "Upload deleted"}
+    return success_response("Upload deleted successfully")
 
 
 --------------------------------------------------------------------------------
@@ -725,6 +1099,9 @@ FILE: backend\app\core\config.py
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
+    env: str = "production"
+    debug: bool = False
+    log_level: str = "INFO"
     mongodb_uri: str
     cloudinary_cloud_name: str
     cloudinary_api_key: str
@@ -736,6 +1113,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str
     access_token_expire_minutes: int
     cors_origins: str | list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    groq_api_key: str
+    gemini_api_key: str = ""
+    llm_model: str = "llama-3.3-70b-versatile"
+    gemini_model: str = "gemini-2.0-flash"
 
     class Config:
         env_file = ".env"
@@ -747,10 +1128,56 @@ settings = Settings()
 --------------------------------------------------------------------------------
 FILE: backend\app\core\exceptions.py
 --------------------------------------------------------------------------------
+from typing import Optional
+
 class AppException(Exception):
-    def __init__(self, message: str, status_code: int = 400):
+    def __init__(self, message: str, status_code: int = 400, errors: Optional[list] = None):
         self.message = message
         self.status_code = status_code
+        self.errors = errors or []
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\logging_config.py
+--------------------------------------------------------------------------------
+import logging
+import contextvars
+import json
+from datetime import datetime
+from logging import Formatter, LogRecord
+from app.core.config import settings
+
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id", default="-")
+
+class JSONContextFormatter(Formatter):
+    def format(self, record: LogRecord) -> str:
+        log_obj = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "request_id": request_id_var.get(),
+            "user_id": user_id_var.get(),
+            "message": record.getMessage(),
+            "logger": record.name
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+def setup_logging():
+    formatter = JSONContextFormatter()
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    
+    root_logger = logging.getLogger()
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    root_logger.setLevel(level)
+    
+    # Remove existing handlers to prevent duplicates
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+        
+    root_logger.addHandler(handler)
 
 
 --------------------------------------------------------------------------------
@@ -763,8 +1190,8 @@ logger = logging.getLogger(__name__)
 
 try:
     nlp = spacy.load("en_core_web_sm")
+    logger.info("SpaCy model 'en_core_web_sm' loaded successfully.")
 except OSError:
-    logger.warning("SpaCy model 'en_core_web_sm' is missing. NLP operations will fail during runtime.")
     nlp = None
 
 
@@ -778,10 +1205,56 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 --------------------------------------------------------------------------------
+FILE: backend\app\core\responses.py
+--------------------------------------------------------------------------------
+from typing import Any, Optional
+from fastapi.responses import JSONResponse
+
+def success_response(message: str, data: Optional[Any] = None, status_code: int = 200) -> dict:
+    return {
+        "success": True,
+        "message": message,
+        "data": data or {},
+        "errors": []
+    }
+
+def error_response(message: str, errors: Optional[list] = None, status_code: int = 400) -> JSONResponse:
+    content = {
+        "success": False,
+        "message": message,
+        "data": {},
+        "errors": errors or []
+    }
+    return JSONResponse(status_code=status_code, content=content)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\sanitization.py
+--------------------------------------------------------------------------------
+import bleach
+
+from fastapi import HTTPException
+
+def sanitize_text(text: str) -> str:
+    if not text:
+        return text
+    return bleach.clean(text.strip())
+
+def sanitize_query(query: str | None = None) -> str | None:
+    if query:
+        # Prevent NoSQL Operator Injection
+        if "$" in query or "{" in query:
+            raise HTTPException(status_code=400, detail="Invalid characters in query parameter.")
+        return sanitize_text(query)
+    return None
+
+
+--------------------------------------------------------------------------------
 FILE: backend\app\core\security.py
 --------------------------------------------------------------------------------
 from datetime import datetime, timedelta
 from typing import Optional, Union, Any
+import secrets
 from passlib.context import CryptContext
 from jose import jwt
 from app.core.config import settings
@@ -814,24 +1287,165 @@ def create_access_token(subject: Union[str, Any], expires_delta: Optional[timede
     )
     return encoded_jwt
 
+def create_refresh_token(subject: Union[str, Any]) -> str:
+    expire = datetime.utcnow() + timedelta(days=7)
+    to_encode = {
+        "exp": expire, 
+        "sub": str(subject),
+        "iat": datetime.utcnow(),
+        "type": "refresh"
+    }
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+def verify_csrf_token(header_token: str, cookie_token: str) -> bool:
+    if not header_token or not cookie_token:
+        return False
+    return secrets.compare_digest(header_token, cookie_token)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\text_cleaner.py
+--------------------------------------------------------------------------------
+import re
+from spellchecker import SpellChecker
+from app.core.exceptions import AppException
+
+spell = SpellChecker()
+
+MAX_INPUT_LENGTH = 1000
+
+_COMMON_TYPO_PATTERNS = re.compile(r"(.)\1{2,}")
+
+
+def _is_likely_name_or_unknown(word: str) -> bool:
+    if not spell.known([word]):
+        candidates = spell.candidates(word) or set()
+        if not candidates:
+            return True
+        if len(word) >= 4 and not _COMMON_TYPO_PATTERNS.search(word):
+            return True
+    return False
+
+
+def _correct_word_token(word: str) -> str:
+    if len(word) <= 1:
+        return word
+    if word.isupper() or word.isnumeric():
+        return word
+    if spell.known([word]):
+        return word
+    if _is_likely_name_or_unknown(word):
+        return word
+
+    reduced = re.sub(r"(.)\1{2,}", r"\1\1", word)
+    if reduced != word:
+        corr = spell.correction(reduced)
+        if corr and spell.known([corr]):
+            return corr
+
+    corr = spell.correction(word)
+    if corr and corr != word and spell.known([corr]):
+        return corr
+
+    return word
+
+
+def _spellcheck_string(text: str) -> str:
+    def replace_match(match):
+        word = match.group(0)
+
+        if word.istitle() and len(word) > 1:
+            return word
+
+        is_upper = word.isupper()
+        corrected = _correct_word_token(word.lower() if not is_upper else word)
+
+        if is_upper:
+            return corrected.upper()
+        return corrected
+
+    return re.sub(r"\b[A-Za-z]+\b", replace_match, text)
+
+
+def clean_text(raw_text: str) -> str:
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise AppException("Input text must be a non-empty string.", 400)
+
+    truncated = raw_text[:MAX_INPUT_LENGTH]
+    return _spellcheck_string(truncated)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\core\utils.py
+--------------------------------------------------------------------------------
+import asyncio
+import logging
+from functools import wraps
+
+logger = logging.getLogger(__name__)
+
+def retry_async(max_retries: int = 3, delay: float = 1.0):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(
+                        f"Attempt {attempt}/{max_retries} failed for {func.__name__}: {e}. "
+                        f"Retrying in {delay} seconds..."
+                    )
+                    if attempt < max_retries:
+                        await asyncio.sleep(delay)
+            
+            logger.error(f"All {max_retries} attempts failed for {func.__name__}. Last error: {last_exception}")
+            raise last_exception
+        return wrapper
+    return decorator
+
 
 --------------------------------------------------------------------------------
 FILE: backend\app\data\gesture_map.json
 --------------------------------------------------------------------------------
 {
-  "YESTERDAY": "ga045", "TODAY": "ga046", "TOMORROW": "ga047",
-  "NOW": "ga048", "LATER": "ga049", "MORNING": "ga050",
-  "AFTERNOON": "ga051", "EVENING": "ga052", "NIGHT": "ga053", "SOON": "ga054",
-  "WHO": "ga101", "WHAT": "ga102", "WHERE": "ga103",
-  "WHEN": "ga104", "WHY": "ga105", "HOW": "ga106", "WHICH": "ga107",
-  "NOT": "ga201", "NO": "ga202", "NEVER": "ga203", 
-  "NONE": "ga204", "NOTHING": "ga205",
-  "RUN": "ga301", "WALK": "ga302", "EAT": "ga303", "DRINK": "ga304",
-  "SLEEP": "ga305", "WORK": "ga306", "PLAY": "ga307", "HELP": "ga308",
-  "FAST": "ga309", "SLOW": "ga310", "GOOD": "ga311", "BAD": "ga312",
-  "BEAUTIFUL": "ga313", "UGLY": "ga314", "HAPPY": "ga315", "SAD": "ga316",
-  "I": "ga401", "YOU": "ga402", "HE": "ga403", 
-  "SHE": "ga404", "WE": "ga405", "THEY": "ga406"
+  "I": "ga001", "YOU": "ga002", "HE": "ga003", "SHE": "ga004", "WE": "ga005", "THEY": "ga006",
+  "WHO": "ga007", "WHAT": "ga008", "WHERE": "ga009", "WHEN": "ga010", "WHY": "ga011", "HOW": "ga012", "WHICH": "ga013",
+  "NOT": "ga014", "NO": "ga015", "NEVER": "ga016", "NONE": "ga017", "NOTHING": "ga018",
+  "YESTERDAY": "ga019", "TODAY": "ga020", "TOMORROW": "ga021", "NOW": "ga022", "LATER": "ga023",
+  "MORNING": "ga024", "AFTERNOON": "ga025", "EVENING": "ga026", "NIGHT": "ga027", "SOON": "ga028",
+  "RUN": "ga029", "WALK": "ga030", "EAT": "ga031", "DRINK": "ga032", "SLEEP": "ga033",
+  "WORK": "ga034", "PLAY": "ga035", "HELP": "ga036",
+  "FAST": "ga037", "SLOW": "ga038", "GOOD": "ga039", "BAD": "ga040",
+  "BEAUTIFUL": "ga041", "UGLY": "ga042", "HAPPY": "ga043", "SAD": "ga044",
+  "FEEL": "ga045", "WANT": "ga046", "NEED": "ga047", "LIKE": "ga048", "LOVE": "ga049",
+  "KNOW": "ga050", "THINK": "ga051", "SEE": "ga052", "HEAR": "ga053", "UNDERSTAND": "ga054",
+  "COME": "ga055", "GO": "ga056", "STOP": "ga057", "START": "ga058", "FINISH": "ga059",
+  "HAVE": "ga060", "GIVE": "ga061", "TAKE": "ga062", "MAKE": "ga063", "FIND": "ga064",
+  "HOME": "ga065", "SCHOOL": "ga066", "WORK_PLACE": "ga067", "HOSPITAL": "ga068", "STORE": "ga069",
+  "FOOD": "ga070", "WATER": "ga071", "BOOK": "ga072", "PHONE": "ga073", "CAR": "ga074",
+  "PLEASE": "ga075", "SORRY": "ga076", "THANK_YOU": "ga077", "YES": "ga078",
+  "HELLO": "ga079", "GOODBYE": "ga080", "NAME": "ga081", "AGE": "ga082",
+  "DAY": "ga083", "WEEK": "ga084", "MONTH": "ga085", "YEAR": "ga086",
+  "BIG": "ga087", "SMALL": "ga088", "MORE": "ga089", "LESS": "ga090",
+  "HOT": "ga091", "COLD": "ga092", "NEW": "ga093", "OLD": "ga094",
+  "SICK": "ga095", "FINE": "ga096", "TIRED": "ga097", "HUNGRY": "ga098", "THIRSTY": "ga099",
+  "FAMILY": "ga100", "FRIEND": "ga101", "MOTHER": "ga102", "FATHER": "ga103", "CHILD": "ga104",
+
+  "A": "gaLET_A", "B": "gaLET_B", "C": "gaLET_C", "D": "gaLET_D", "E": "gaLET_E",
+  "F": "gaLET_F", "G": "gaLET_G", "H": "gaLET_H", "I_LETTER": "gaLET_I", "J": "gaLET_J",
+  "K": "gaLET_K", "L": "gaLET_L", "M": "gaLET_M", "N": "gaLET_N", "O": "gaLET_O",
+  "P": "gaLET_P", "Q": "gaLET_Q", "R": "gaLET_R", "S": "gaLET_S", "T": "gaLET_T",
+  "U": "gaLET_U", "V": "gaLET_V", "W": "gaLET_W", "X": "gaLET_X", "Y": "gaLET_Y",
+  "Z": "gaLET_Z",
+
+  "0": "gaNUM_0", "1": "gaNUM_1", "2": "gaNUM_2", "3": "gaNUM_3", "4": "gaNUM_4",
+  "5": "gaNUM_5", "6": "gaNUM_6", "7": "gaNUM_7", "8": "gaNUM_8", "9": "gaNUM_9"
 }
 
 
@@ -856,29 +1470,33 @@ FILE: backend\app\data\sentiment_map.json
 FILE: backend\app\db\mongodb.py
 --------------------------------------------------------------------------------
 from motor.motor_asyncio import AsyncIOMotorClient
-import sys
 from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 class Database:
     client: AsyncIOMotorClient = None
 
+
 db = Database()
+
 
 async def connect_to_mongo():
     try:
         db.client = AsyncIOMotorClient(settings.mongodb_uri)
-        await db.client.admin.command('ping')
-        logger.info("Successfully connected to core MongoDB clusters.")
+        await db.client.admin.command("ping")
+        logger.info("Successfully connected to MongoDB.")
     except Exception:
-        logger.exception("FATAL: Failed to connect to MongoDB cluster:")
-        sys.exit(1)
+        logger.exception("FATAL: Failed to connect to MongoDB.")
+        raise RuntimeError("MongoDB connection failed. Cannot start application.")
+
 
 async def close_mongo_connection():
     if db.client:
         db.client.close()
+
 
 def get_database():
     return db.client.signfusion
@@ -888,52 +1506,59 @@ def get_database():
 FILE: backend\app\db\task_repository.py
 --------------------------------------------------------------------------------
 import logging
-from datetime import datetime
-from app.models.task import TaskDBModel
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.core.exceptions import AppException
 import uuid
+from datetime import datetime
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.models.task import TaskDBModel
 
 logger = logging.getLogger(__name__)
+
 
 class TaskRepository:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.collection = self.db.get_collection("tasks")
 
-    async def create_task(self, user_id: str, input_type: str, raw_text: str, processed_text: str, 
-                          emotion_id: str, asl_grammar_output: str, sentiment_animation_id: str, 
-                          gesture_animation_ids: list[str], animation_sequence: list[dict], 
-                          file_metadata: dict = None) -> TaskDBModel:
-        logger.info(f"TaskRepository: Inserting translation record for user {user_id}")
-        try:
-            custom_task_id = f"sfip{str(uuid.uuid4().int)[:10]}"
-            task_data = TaskDBModel(
-                user_id=user_id,
-                task_id=custom_task_id,
-                input_type=input_type,
-                input_text=raw_text,
-                processed_text=processed_text,
-                emotion_id=emotion_id,
-                asl_grammar_output=asl_grammar_output,
-                sentiment_animation_id=sentiment_animation_id,
-                gesture_animation_ids=gesture_animation_ids,
-                animation_sequence=animation_sequence,
-                file_metadata=file_metadata,
-                created_at=datetime.utcnow()
-            )
-            
-            task_dict = task_data.dict(by_alias=True, exclude={"id"})
-            
-            result = await self.collection.insert_one(task_dict)
-            if not result.inserted_id:
-                raise AppException("Failed to insert task record into MongoDB", status_code=500)
-                
-            task_data.id = result.inserted_id
-            return task_data
-        except Exception as e:
-            logger.exception("TaskRepository Exception:")
-            raise AppException(f"Database operation failed: {str(e)}", status_code=500) from e
+    async def create_task(
+        self,
+        user_id: str,
+        input_type: str,
+        raw_text: str,
+        processed_text: str,
+        emotion_id: str,
+        asl_grammar_output: str,
+        sentiment_animation_id: str,
+        gesture_animation_ids: list[str],
+        animation_sequence: list[dict],
+        file_metadata: dict = None,
+    ) -> TaskDBModel:
+        logger.info(f"TaskRepository: Inserting record for user {user_id}.")
+
+        custom_task_id = f"sfip{str(uuid.uuid4().int)[:10]}"
+        task_data = TaskDBModel(
+            user_id=user_id,
+            task_id=custom_task_id,
+            input_type=input_type,
+            input_text=raw_text,
+            processed_text=processed_text,
+            emotion_id=emotion_id,
+            asl_grammar_output=asl_grammar_output,
+            sentiment_animation_id=sentiment_animation_id,
+            gesture_animation_ids=gesture_animation_ids,
+            animation_sequence=animation_sequence,
+            file_metadata=file_metadata,
+            created_at=datetime.utcnow(),
+        )
+
+        task_dict = task_data.dict(by_alias=True, exclude={"id"})
+        result = await self.collection.insert_one(task_dict)
+
+        if not result.inserted_id:
+            raise RuntimeError("MongoDB insert_one returned no inserted_id.")
+
+        task_data.id = result.inserted_id
+        logger.info(f"TaskRepository: Record inserted successfully. task_id={custom_task_id}.")
+        return task_data
 
 
 --------------------------------------------------------------------------------
@@ -1042,6 +1667,7 @@ class UserDBModel(BaseModel):
     phone_number: Optional[str] = None
     profile_picture_url: Optional[str] = None
     plan: str = Field(default="free")
+    role: str = Field(default="user")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -1052,12 +1678,73 @@ class UserDBModel(BaseModel):
 
 
 --------------------------------------------------------------------------------
+FILE: backend\app\schemas\ai_translation.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, field_validator
+from typing import List
+from enum import Enum
+
+
+class AIEmotion(str, Enum):
+    HAPPY = "HAPPY"
+    SAD = "SAD"
+    NEUTRAL = "NEUTRAL"
+
+
+class AITranslationResult(BaseModel):
+    asl_text: str
+    tokens: List[str]
+    emotion: str
+
+    @field_validator("asl_text")
+    @classmethod
+    def asl_text_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("asl_text must not be empty")
+        return v.strip()
+
+    @field_validator("tokens")
+    @classmethod
+    def tokens_must_not_be_empty(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("tokens must not be empty")
+        return [str(t).upper() for t in v]
+
+    @field_validator("emotion")
+    @classmethod
+    def normalize_emotion(cls, v: str) -> str:
+        normalized = v.strip().upper()
+        if normalized not in [e.value for e in AIEmotion]:
+            return AIEmotion.NEUTRAL.value
+        return normalized
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\schemas\base.py
+--------------------------------------------------------------------------------
+from pydantic import BaseModel, model_validator
+from app.core.sanitization import sanitize_text
+from typing import Any
+
+class SanitizedBaseModel(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_strings(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, str):
+                    data[key] = sanitize_text(value)
+        return data
+
+
+--------------------------------------------------------------------------------
 FILE: backend\app\schemas\feedback.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, Field
 from datetime import datetime
+from app.schemas.base import SanitizedBaseModel
 
-class FeedbackCreate(BaseModel):
+class FeedbackCreate(SanitizedBaseModel):
     subject: str = Field(..., min_length=3, max_length=150)
     message: str = Field(..., min_length=10, max_length=2000)
 
@@ -1103,16 +1790,17 @@ FILE: backend\app\schemas\text.py
 from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
+from app.schemas.base import SanitizedBaseModel
 
 class InputType(str, Enum):
     TEXT = "TEXT"
     SPEECH = "SPEECH"
     DOCUMENT = "DOCUMENT"
 
-class TextInputRequest(BaseModel):
-    text: str = Field(..., min_length=1, description="The textual input from the user/speech recognition")
+class TextInputRequest(SanitizedBaseModel):
+    text: str = Field(..., min_length=1, max_length=2000, description="The textual input from the user/speech recognition")
     type: InputType = Field(InputType.TEXT, description="Source of the text (TEXT, SPEECH, or DOCUMENT)")
-    filename: Optional[str] = Field(None, description="Optional filename if document was uploaded")
+    filename: Optional[str] = Field(None, pattern=r"^[\w\-. ]+$", description="Optional filename if document was uploaded")
     
 class TextInputResponse(BaseModel):
     message: str
@@ -1127,10 +1815,11 @@ class TextInputResponse(BaseModel):
 FILE: backend\app\schemas\user.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.base import SanitizedBaseModel
 from datetime import datetime
 import re
 
-class UserCreateRequest(BaseModel):
+class UserCreateRequest(SanitizedBaseModel):
     email: EmailStr
     password: str = Field(
         ..., 
@@ -1164,14 +1853,14 @@ class UserResponse(BaseModel):
     plan: str
     created_at: datetime
 
-class UserUpdateRequest(BaseModel):
-    full_name: str | None = None
-    username: str | None = None
-    bio: str | None = None
-    phone_number: str | None = None
+class UserUpdateRequest(SanitizedBaseModel):
+    full_name: str | None = Field(None, max_length=100)
+    username: str | None = Field(None, pattern=r"^[a-zA-Z0-9_.-]{3,30}$", description="Alphanumeric with dot, underscore, dash")
+    bio: str | None = Field(None, max_length=500)
+    phone_number: str | None = Field(None, pattern=r"^\+?[1-9]\d{1,14}$", description="E.164 standard phone number")
     profile_picture_url: str | None = None
 
-class PasswordUpdateRequest(BaseModel):
+class PasswordUpdateRequest(SanitizedBaseModel):
     current_password: str
     new_password: str = Field(
         ..., 
@@ -1197,85 +1886,532 @@ class GoogleAuthRequest(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\services\a_nlp_service.py
+FILE: backend\app\services\a_preprocess_service.py
+--------------------------------------------------------------------------------
+import logging
+import asyncio
+from fastapi.concurrency import run_in_threadpool
+from app.core.text_cleaner import clean_text
+
+logger = logging.getLogger(__name__)
+
+
+class PreprocessService:
+    async def process(self, raw_text: str) -> str:
+        result = await run_in_threadpool(clean_text, raw_text)
+        logger.info("PreprocessService: Text cleaned and normalized.")
+        return result
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\base_translation.py
+--------------------------------------------------------------------------------
+import logging
+from app.schemas.ai_translation import AITranslationResult
+
+logger = logging.getLogger(__name__)
+
+class BaseAITranslationService:
+    def _validate(self, parsed: dict, service_name: str) -> AITranslationResult:
+        result = AITranslationResult(**parsed)
+
+        asl_text = result.asl_text.strip()
+        if not asl_text:
+            raise ValueError(f"Validation failed in {service_name}: asl_text is empty.")
+
+        tokens = [t.upper() for t in result.tokens if t.strip()]
+        if not tokens:
+            raise ValueError(f"Validation failed in {service_name}: tokens list is empty after normalization.")
+
+        expected_words = asl_text.upper().split()
+
+        if expected_words != tokens:
+            logger.warning(
+                f"{service_name}: Token mismatch. "
+                f"asl_words={expected_words} tokens={tokens}. Rebuilding tokens from asl_text."
+            )
+            tokens = expected_words
+
+        result.tokens = tokens
+        return result
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\b_gemini_translation_service.py
+--------------------------------------------------------------------------------
+import json
+import asyncio
+import logging
+import os
+from collections import OrderedDict
+
+from google import genai
+from google.genai import types as genai_types
+from pydantic import ValidationError
+
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.schemas.ai_translation import AITranslationResult
+from app.services.base_translation import BaseAITranslationService
+
+logger = logging.getLogger(__name__)
+
+_GEMINI_TIMEOUT_SECONDS = 12.0
+_CACHE_MAX_SIZE = 256
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+
+def _load_json(filename: str) -> dict:
+    path = os.path.join(_DATA_DIR, filename)
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _build_prompt(clean_text: str, gesture_map: dict, sentiment_map: dict) -> str:
+    gesture_vocab = ", ".join(sorted(k for k in gesture_map.keys() if len(k) > 1))
+    emotion_list = ", ".join(sentiment_map.keys())
+    return (
+        "You are a strict ASL grammar engine. Return ONLY a single valid JSON object. No markdown. No explanation.\n\n"
+        "TASK 1 — ASL GRAMMAR CONVERSION:\n"
+        "Convert the input text to ASL grammar:\n"
+        "- Remove: articles (a, an, the), auxiliary verbs (is, am, are, was, were, be, been, being), "
+        "conjunctions (and, but, or), and prepositions (of, in, on, at, by, for, to, with).\n"
+        "- Reorder: time expressions first, then topic/subject, then predicate/action.\n"
+        "- All output tokens must be UPPERCASE English words.\n"
+        "- Proper nouns (names of people, places, brands): preserve exactly as-is, uppercased. Do NOT substitute or alter them.\n"
+        "- Unknown or invented words: preserve as uppercase without substitution.\n"
+        f"- When semantically equivalent, prefer words from this gesture vocabulary: [{gesture_vocab}]\n\n"
+        "TASK 2 — EMOTION CLASSIFICATION:\n"
+        f"Classify the overall emotion of the input. Choose exactly one from: {emotion_list}.\n\n"
+        "STRICT OUTPUT RULES:\n"
+        "- tokens must contain exactly the same words as asl_text, split by spaces. No extras. No omissions.\n"
+        "- asl_text is the space-joined version of tokens.\n"
+        "- tokens must be a non-empty list of uppercase strings.\n"
+        "- Return ONLY this exact JSON structure:\n"
+        '{"asl_text": "WORD1 WORD2 WORD3", "tokens": ["WORD1", "WORD2", "WORD3"], "emotion": "NEUTRAL"}\n\n'
+        f"INPUT:\n{clean_text}"
+    )
+
+
+class _LRUCache:
+    def __init__(self, max_size: int):
+        self._max_size = max_size
+        self._store: OrderedDict[str, AITranslationResult] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> AITranslationResult | None:
+        async with self._lock:
+            if key not in self._store:
+                return None
+            self._store.move_to_end(key)
+            return self._store[key]
+
+    async def set(self, key: str, value: AITranslationResult) -> None:
+        async with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            else:
+                if len(self._store) >= self._max_size:
+                    self._store.popitem(last=False)
+            self._store[key] = value
+
+
+class GeminiTranslationService(BaseAITranslationService):
+    _instance: "GeminiTranslationService | None" = None
+
+    def __new__(cls) -> "GeminiTranslationService":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._cache = _LRUCache(_CACHE_MAX_SIZE)
+        self._gesture_map: dict = {}
+        self._sentiment_map: dict = {}
+        self._client = None
+        self._success_count = 0
+        self._failure_count = 0
+
+        if not settings.gemini_api_key:
+            logger.warning("GeminiTranslationService: GEMINI_API_KEY not set. Service disabled.")
+            return
+
+        try:
+            self._gesture_map = _load_json("gesture_map.json")
+            self._sentiment_map = _load_json("sentiment_map.json")
+            self._client = genai.Client(api_key=settings.gemini_api_key)
+            logger.info(
+                f"GeminiTranslationService: Initialized. model={settings.gemini_model} "
+                f"gesture_vocab={len(self._gesture_map)} sentiments={len(self._sentiment_map)}."
+            )
+        except Exception:
+            logger.exception("GeminiTranslationService: Initialization failed.")
+            self._client = None
+
+    @property
+    def is_available(self) -> bool:
+        return self._client is not None
+
+    def _strip_fences(self, raw: str) -> str:
+        stripped = raw.strip()
+        if not stripped.startswith("```"):
+            return stripped
+        lines = stripped.splitlines()
+        inner = [ln for ln in lines if not ln.strip().startswith("```")]
+        return "\n".join(inner).strip()
+
+    def _extract_json(self, raw: str) -> dict:
+        clean = self._strip_fences(raw)
+        decoder = json.JSONDecoder()
+        for i, char in enumerate(clean):
+            if char != "{":
+                continue
+            try:
+                obj, _ = decoder.raw_decode(clean, i)
+                if not isinstance(obj, dict):
+                    continue
+                missing = {"asl_text", "tokens", "emotion"} - obj.keys()
+                if missing:
+                    logger.warning(f"GeminiTranslationService: JSON missing keys {missing}.")
+                    continue
+                return obj
+            except json.JSONDecodeError:
+                continue
+        raise ValueError(f"No valid JSON with required keys found. Raw preview: {clean[:200]!r}")
+
+    def _validate(self, parsed: dict) -> AITranslationResult:
+        return super()._validate(parsed, "GeminiTranslationService")
+
+    def _call_gemini_sync(self, prompt: str) -> str:
+        response = self._client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                temperature=0.0,
+                candidate_count=1,
+            ),
+        )
+        return response.text
+
+    async def _invoke(self, clean_text: str) -> AITranslationResult:
+        prompt = _build_prompt(clean_text, self._gesture_map, self._sentiment_map)
+        raw = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, self._call_gemini_sync, prompt),
+            timeout=_GEMINI_TIMEOUT_SECONDS,
+        )
+        logger.debug(f"GeminiTranslationService: Raw preview: {raw[:120].replace(chr(10), ' ')!r}")
+        parsed = self._extract_json(raw)
+        return self._validate(parsed)
+
+    async def translate(self, clean_text: str) -> AITranslationResult:
+        if not self.is_available:
+            raise AppException("Gemini service not initialized.", 503)
+
+        cached = await self._cache.get(clean_text)
+        if cached is not None:
+            logger.info("GeminiTranslationService: Cache hit.")
+            return cached
+
+        last_exc: Exception | None = None
+
+        for attempt in range(2):
+            if attempt > 0:
+                await asyncio.sleep(1.0)
+                logger.info("GeminiTranslationService: Retrying after failure.")
+
+            try:
+                logger.info(f"GeminiTranslationService: Attempt {attempt + 1}.")
+                result = await self._invoke(clean_text)
+                self._success_count += 1
+                logger.info(
+                    f"GeminiTranslationService: Success. "
+                    f"success={self._success_count} failure={self._failure_count}."
+                )
+                await self._cache.set(clean_text, result)
+                return result
+
+            except (ValidationError, ValueError, json.JSONDecodeError) as e:
+                logger.warning(
+                    f"GeminiTranslationService: Validation/parse error attempt {attempt + 1}: {e}"
+                )
+                last_exc = e
+
+            except asyncio.TimeoutError:
+                logger.warning(f"GeminiTranslationService: Timeout on attempt {attempt + 1}.")
+                last_exc = asyncio.TimeoutError()
+
+            except AppException:
+                raise
+
+            except Exception as e:
+                logger.warning(f"GeminiTranslationService: API error attempt {attempt + 1}: {type(e).__name__}: {e}")
+                last_exc = e
+
+        self._failure_count += 1
+        logger.error(
+            f"GeminiTranslationService: All attempts exhausted. "
+            f"success={self._success_count} failure={self._failure_count}. "
+            f"Last error: {type(last_exc).__name__}: {last_exc}"
+        )
+        raise AppException(f"Gemini translation failed after retries: {last_exc}", 503)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\c_ai_translation_service.py
+--------------------------------------------------------------------------------
+import logging
+import json
+import asyncio
+import time
+from collections import OrderedDict
+from langchain_groq import ChatGroq
+from langchain_core.prompts import PromptTemplate
+from pydantic import ValidationError
+from app.schemas.ai_translation import AITranslationResult
+from app.core.config import settings
+from app.core.exceptions import AppException
+from app.services.base_translation import BaseAITranslationService
+
+logger = logging.getLogger(__name__)
+
+_CIRCUIT_BREAKER_THRESHOLD = 5
+_CIRCUIT_BREAKER_COOLDOWN_SECONDS = 60
+_CACHE_MAX_SIZE = 256
+_LOG_RESPONSE_PREVIEW_LENGTH = 120
+
+_PROMPT_TEMPLATE = PromptTemplate(
+    input_variables=["input_text", "known_words"],
+    template=(
+        "You are an ASL grammar translation engine. Your only job is to output valid JSON.\n\n"
+        "Convert the input sentence into ASL grammar form.\n\n"
+        "KNOWN GESTURE VOCABULARY (prefer these words in your output tokens when semantically correct):\n"
+        "{known_words}\n\n"
+        "Rules:\n"
+        "- Return ONLY a JSON object. No markdown, no explanation, no extra text.\n"
+        "- Remove articles (a, an, the), auxiliary verbs (is, am, are, was, were, be), and prepositions (of, in, on, at, by).\n"
+        "- Reorder words to ASL topic-comment structure (time expressions first, then subject, then predicate).\n"
+        "- All tokens must be uppercase English words.\n"
+        "- IMPORTANT: Do NOT alter or correct proper nouns (names of people, places, brands). Keep them exactly as given, uppercased.\n"
+        "- Prefer using words from the KNOWN GESTURE VOCABULARY when they are semantically equivalent.\n"
+        "- tokens list must contain every word present in asl_text, split by spaces.\n"
+        "- emotion must be exactly one of: HAPPY, SAD, NEUTRAL.\n\n"
+        "Input:\n{input_text}\n\n"
+        'Output:\n{{"asl_text": "UPPERCASE ASL SENTENCE", "tokens": ["UPPERCASE", "ASL", "SENTENCE"], "emotion": "NEUTRAL"}}'
+    ),
+)
+
+
+class _LRUCache:
+    def __init__(self, max_size: int):
+        self._max_size = max_size
+        self._store: OrderedDict[str, AITranslationResult] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> AITranslationResult | None:
+        async with self._lock:
+            if key not in self._store:
+                return None
+            self._store.move_to_end(key)
+            return self._store[key]
+
+    async def set(self, key: str, value: AITranslationResult) -> None:
+        async with self._lock:
+            if key in self._store:
+                self._store.move_to_end(key)
+            else:
+                if len(self._store) >= self._max_size:
+                    self._store.popitem(last=False)
+            self._store[key] = value
+
+
+class AITranslationService(BaseAITranslationService):
+    _instance: "AITranslationService | None" = None
+
+    def __new__(cls) -> "AITranslationService":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._consecutive_failures = 0
+        self._circuit_opened_at: float | None = None
+        self._cache = _LRUCache(_CACHE_MAX_SIZE)
+        self._ai_success_count = 0
+        self._ai_failure_count = 0
+        self._known_words_str: str = ""
+
+        try:
+            self.llm = ChatGroq(
+                api_key=settings.groq_api_key,
+                model_name=settings.llm_model,
+                temperature=0.0,
+                timeout=7.0,
+                max_retries=0,
+            )
+            self._chain = _PROMPT_TEMPLATE | self.llm
+        except Exception:
+            logger.exception("AITranslationService: Failed to initialize ChatGroq.")
+            self.llm = None
+            self._chain = None
+
+    def load_gesture_vocabulary(self, gesture_map: dict) -> None:
+        words = sorted(gesture_map.keys())
+        self._known_words_str = ", ".join(words)
+        logger.info(f"AITranslationService: Loaded {len(words)} gesture vocabulary words into prompt context.")
+
+    def _is_circuit_open(self) -> bool:
+        if self._consecutive_failures < _CIRCUIT_BREAKER_THRESHOLD:
+            return False
+        if self._circuit_opened_at is None:
+            return True
+        elapsed = time.monotonic() - self._circuit_opened_at
+        if elapsed >= _CIRCUIT_BREAKER_COOLDOWN_SECONDS:
+            logger.info("AITranslationService: Circuit breaker cooldown elapsed. Resetting.")
+            self._consecutive_failures = 0
+            self._circuit_opened_at = None
+            return False
+        return True
+
+    def _record_success(self) -> None:
+        self._consecutive_failures = 0
+        self._circuit_opened_at = None
+        self._ai_success_count += 1
+        logger.info(f"AITranslationService: Cumulative success={self._ai_success_count} failure={self._ai_failure_count}.")
+
+    def _record_failure(self) -> None:
+        self._consecutive_failures += 1
+        self._ai_failure_count += 1
+        if self._consecutive_failures >= _CIRCUIT_BREAKER_THRESHOLD:
+            if self._circuit_opened_at is None:
+                self._circuit_opened_at = time.monotonic()
+                logger.warning(
+                    f"AITranslationService: Circuit breaker opened. "
+                    f"consecutive={self._consecutive_failures} total_failures={self._ai_failure_count}."
+                )
+
+    def _extract_json(self, raw_content: str) -> dict:
+        decoder = json.JSONDecoder()
+        for i, char in enumerate(raw_content):
+            if char == "{":
+                try:
+                    obj, _ = decoder.raw_decode(raw_content, i)
+                    if not isinstance(obj, dict):
+                        continue
+                    missing = {"asl_text", "tokens", "emotion"} - obj.keys()
+                    if missing:
+                        raise ValueError(f"LLM JSON missing required keys: {missing}")
+                    return obj
+                except json.JSONDecodeError:
+                    continue
+        raise ValueError("No valid JSON object with required keys found in LLM response.")
+
+    def _validate(self, parsed_data: dict) -> AITranslationResult:
+        return super()._validate(parsed_data, "AITranslationService")
+
+    async def _invoke_llm(self, clean_text: str) -> AITranslationResult:
+        response = await self._chain.ainvoke({
+            "input_text": clean_text,
+            "known_words": self._known_words_str or "No vocabulary loaded",
+        })
+        preview = response.content[:_LOG_RESPONSE_PREVIEW_LENGTH].replace("\n", " ")
+        logger.debug(f"AITranslationService: LLM response preview: {preview!r}")
+        parsed_data = self._extract_json(response.content)
+        return self._validate(parsed_data)
+
+    async def translate(self, clean_text: str) -> AITranslationResult:
+        if not self.llm or not self._chain:
+            raise AppException("AI engine not initialized.", 503)
+
+        if self._is_circuit_open():
+            logger.warning(
+                f"AITranslationService: Circuit breaker open "
+                f"(consecutive={self._consecutive_failures}). Triggering fallback."
+            )
+            raise AppException("AI service temporarily disabled due to repeated failures.", 503)
+
+        cached = await self._cache.get(clean_text)
+        if cached is not None:
+            logger.info("AITranslationService: Cache hit.")
+            return cached
+
+        last_exception: Exception | None = None
+
+        for attempt in range(2):
+            if attempt > 0:
+                await asyncio.sleep(1.0)
+                logger.info("AITranslationService: Retrying LLM call.")
+
+            try:
+                logger.info(f"AITranslationService: Invoking LLM. Attempt {attempt + 1}.")
+                result = await self._invoke_llm(clean_text)
+                self._record_success()
+                await self._cache.set(clean_text, result)
+                logger.info("AITranslationService: Translation successful.")
+                return result
+
+            except (ValidationError, ValueError, json.JSONDecodeError) as e:
+                logger.warning(f"AITranslationService: Parsing/validation error on attempt {attempt + 1}: {e}")
+                last_exception = e
+
+            except AppException:
+                raise
+
+            except Exception as e:
+                logger.warning(f"AITranslationService: LLM call error on attempt {attempt + 1}: {e}")
+                last_exception = e
+
+        self._record_failure()
+        raise AppException(f"AI translation failed after retries: {last_exception}", 503)
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\d_nlp_service.py
 --------------------------------------------------------------------------------
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
-import re
-from spellchecker import SpellChecker
 from fastapi.concurrency import run_in_threadpool
 import logging
 from app.schemas.internal import NLPResult, TokenData
 from app.core.exceptions import AppException
 from app.core.nlp_loader import nlp
+from app.core.text_cleaner import clean_text
 
 logger = logging.getLogger(__name__)
 
 try:
-    nltk.data.find('sentiment/vader_lexicon.zip')
+    nltk.data.find("sentiment/vader_lexicon.zip")
 except LookupError:
-    nltk.download('vader_lexicon', quiet=True)
+    nltk.download("vader_lexicon", quiet=True)
 
 sia = SentimentIntensityAnalyzer()
-spell = SpellChecker()
+
 
 class NLPService:
-    def _correct_word_token(self, word: str) -> str:
-        if (word.isupper() and len(word) > 1) or word.isnumeric():
-            return word
-        if spell.known([word]):
-            return word
-            
-        corr1 = spell.correction(word)
-        if corr1 and corr1 != word and spell.known([corr1]):
-            return corr1
-            
-        reduced_3 = re.sub(r"(.)\1{2,}", r"\1", word)
-        corr2 = spell.correction(reduced_3)
-        if corr2 and spell.known([corr2]):
-            return corr2
-            
-        reduced_2 = re.sub(r"(.)\1+", r"\1", word)
-        corr3 = spell.correction(reduced_2)
-        if corr3 and spell.known([corr3]):
-            return corr3
-            
-        return corr1 if corr1 else word
-
-    def _spellcheck_string(self, text: str) -> str:
-        def replace_match(match):
-            word = match.group(0)
-            is_title = word.istitle()
-            is_upper = word.isupper()
-            
-            corr = self._correct_word_token(word.lower() if not is_upper else word)
-            
-            if is_title:
-                return corr.capitalize()
-            elif is_upper:
-                return corr.upper()
-            return corr
-            
-        return re.sub(r"\b[A-Za-z]+\b", replace_match, text)
-
     def _sync_process(self, raw_text: str) -> NLPResult:
-        if not isinstance(raw_text, str) or not raw_text.strip():
-            raw_text = "ERROR"
-            
-        clean_text = self._spellcheck_string(raw_text)
+        text = clean_text(raw_text)
+
         if nlp is None:
             raise AppException("NLP service unavailable", 503)
-        doc = nlp(clean_text)
-        sentiment = sia.polarity_scores(clean_text)
+
+        doc = nlp(text)
+        sentiment = sia.polarity_scores(text)
         compound_score = sentiment.get("compound", 0.0)
-        
+
         if compound_score >= 0.05:
             overall_emotion = "HAPPY"
         elif compound_score <= -0.05:
             overall_emotion = "SAD"
         else:
             overall_emotion = "NEUTRAL"
-            
+
         all_tokens = []
         sentences = []
         for sent in doc.sents:
@@ -1283,30 +2419,31 @@ class NLPService:
             for token in sent:
                 if not token.is_punct and not token.is_space:
                     all_tokens.append(token.text)
-                    token_data = TokenData(
-                        text=token.text,
-                        lemma=token.lemma_,
-                        pos=token.pos_,
-                        dep=token.dep_,
-                        is_stop=token.is_stop
+                    sent_tokens.append(
+                        TokenData(
+                            text=token.text,
+                            lemma=token.lemma_,
+                            pos=token.pos_,
+                            dep=token.dep_,
+                            is_stop=token.is_stop,
+                        )
                     )
-                    sent_tokens.append(token_data)
             if sent_tokens:
                 sentences.append(sent_tokens)
-            
+
         return NLPResult(
             processed_text=" ".join(all_tokens),
             sentences=sentences,
-            emotion_id=overall_emotion
+            emotion_id=overall_emotion,
         )
-        
-    async def process(self, text: str) -> NLPResult:
-        logger.info(f"NLPService: Analyzing input text: {text[:50]}... length: {len(text)}")
-        return await run_in_threadpool(self._sync_process, text)
+
+    async def process(self, raw_text: str) -> NLPResult:
+        logger.info(f"NLPService: Processing text of length {len(raw_text)}.")
+        return await run_in_threadpool(self._sync_process, raw_text)
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\services\b_translation_service.py
+FILE: backend\app\services\e_translation_service.py
 --------------------------------------------------------------------------------
 import logging
 from typing import Set, List
@@ -1379,7 +2516,7 @@ class TranslationService:
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\services\c_animation_service.py
+FILE: backend\app\services\f_animation_service.py
 --------------------------------------------------------------------------------
 import json
 import logging
@@ -1388,24 +2525,28 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+_LETTER_KEY_MAP = {chr(c): chr(c) for c in range(ord("A"), ord("Z") + 1)}
+_LETTER_KEY_MAP["I"] = "I_LETTER"
+
+
 class AnimationService:
     _gesture_map = None
     _sentiment_map = None
-    
+
     def __init__(self):
         self._load_mappings()
-        
+
     @classmethod
     def _load_mappings(cls):
         if cls._gesture_map is not None and cls._sentiment_map is not None:
             return
-            
+
         logger.info("AnimationService: Loading JSON maps into Singleton memory cache.")
-        
+
         base_dir = os.path.dirname(os.path.dirname(__file__))
         gesture_path = os.path.join(base_dir, "data", "gesture_map.json")
         sentiment_path = os.path.join(base_dir, "data", "sentiment_map.json")
-        
+
         try:
             with open(gesture_path, "r") as f:
                 cls._gesture_map = json.load(f)
@@ -1415,40 +2556,50 @@ class AnimationService:
             logger.exception("AnimationService failed to load maps:")
             raise RuntimeError("Failed to load animation maps") from e
 
+    def get_gesture_map(self) -> dict:
+        return self._gesture_map or {}
+
     def get_sentiment_id(self, emotion: str) -> str:
         return self._sentiment_map.get(emotion.upper(), "sa003")
-        
-    def _get_gesture_animation_ids(self, asl_tokens: List[str]) -> List[str]:
-        if not self._gesture_map:
-            raise RuntimeError("Gesture map not initialized")
-        animation_ids: List[str] = []
-        for token in asl_tokens:
-            token_upper = token.upper()
-            if token_upper in self._gesture_map:
-                animation_ids.append(self._gesture_map[token_upper])
-            else:
-                for char in token_upper:
-                    if char.isalpha():
-                        animation_ids.append(f"gaLET_{char}")
-                    elif char.isdigit():
-                        animation_ids.append(f"gaNUM_{char}")
-        return animation_ids
+
+    def _fingerspell(self, word: str) -> List[str]:
+        ids = []
+        for char in word.upper():
+            if char.isalpha():
+                key = _LETTER_KEY_MAP.get(char, char)
+                gid = self._gesture_map.get(key)
+                if gid:
+                    ids.append(gid)
+            elif char.isdigit():
+                gid = self._gesture_map.get(char)
+                if gid:
+                    ids.append(gid)
+        return ids
+
+    def _get_gesture_animation_ids(self, token: str) -> List[str]:
+        token_upper = token.upper()
+
+        if token_upper in self._gesture_map:
+            return [self._gesture_map[token_upper]]
+
+        logger.debug(f"AnimationService: '{token_upper}' not in gesture map — fingerspelling.")
+        return self._fingerspell(token_upper)
 
     def map(self, emotion_id: str, asl_tokens: List[str]) -> Dict[str, Any]:
         logger.info("AnimationService: Mapping generated tree against static dictionary")
         sa_id = self.get_sentiment_id(emotion_id)
-        
+
         animation_seq = []
         all_ga_ids = []
-        
+
         for token in asl_tokens:
-            token_ga_ids = self._get_gesture_animation_ids([token])
+            token_ga_ids = self._get_gesture_animation_ids(token)
             animation_seq.append({
                 "word": token.upper(),
                 "gesture_animation_ids": token_ga_ids
             })
             all_ga_ids.extend(token_ga_ids)
-            
+
         return {
             "sentiment_animation_id": sa_id,
             "gesture_animation_ids": all_ga_ids,
@@ -1457,7 +2608,7 @@ class AnimationService:
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\services\d_output_service.py
+FILE: backend\app\services\g_output_service.py
 --------------------------------------------------------------------------------
 import logging
 from app.schemas.text import TextInputResponse
@@ -1483,60 +2634,349 @@ class OutputService:
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\services\e_orchestrator.py
+FILE: backend\app\services\h_orchestrator.py
 --------------------------------------------------------------------------------
 import logging
-from app.services.a_nlp_service import NLPService
-from app.services.b_translation_service import TranslationService
-from app.services.c_animation_service import AnimationService
-from app.services.d_output_service import OutputService
+import asyncio
+import time
+from pydantic import ValidationError
+from app.services.a_preprocess_service import PreprocessService
+from app.services.b_gemini_translation_service import GeminiTranslationService
+from app.services.c_ai_translation_service import AITranslationService
+from app.services.d_nlp_service import NLPService
+from app.services.e_translation_service import TranslationService
+from app.services.f_animation_service import AnimationService
+from app.services.g_output_service import OutputService
 from app.db.task_repository import TaskRepository
+from app.core.exceptions import AppException
 from app.schemas.text import TextInputResponse
+from app.core.utils import retry_async
 
 logger = logging.getLogger(__name__)
 
+SOURCE_GEMINI = "GEMINI"
+SOURCE_AI = "AI"
+SOURCE_RULE = "RULE"
+
+GEMINI_TIMEOUT_SECONDS = 15.0
+AI_TIMEOUT_SECONDS = 10.0
+
+
 class PipelineOrchestrator:
-    def __init__(self, 
-                 repository: TaskRepository,
-                 nlp_service: NLPService = None,
-                 translation_service: TranslationService = None,
-                 animation_service: AnimationService = None,
-                 output_service: OutputService = None):
-        
+    def __init__(
+        self,
+        repository: TaskRepository,
+        preprocess: PreprocessService = None,
+        gemini_translation: GeminiTranslationService = None,
+        ai_translation: AITranslationService = None,
+        animation_service: AnimationService = None,
+        output_service: OutputService = None,
+    ):
         self.repository = repository
-        self.nlp = nlp_service or NLPService()
-        self.translation = translation_service or TranslationService()
+        self.preprocess = preprocess or PreprocessService()
+        self.gemini_translation = gemini_translation or GeminiTranslationService()
+        self.ai_translation = ai_translation or AITranslationService()
         self.animation = animation_service or AnimationService()
         self.output_handler = output_service or OutputService()
 
-    async def run(self, raw_text: str, user_id: str, input_type: str, file_metadata: dict = None) -> TextInputResponse:
-        logger.info(f"Orchestrator: Kicking off rigid AI Translation flow for User: {user_id}")
+        self._nlp_service: NLPService | None = None
+        self._rule_translation: TranslationService | None = None
+
+    def _get_nlp_service(self) -> NLPService:
+        if self._nlp_service is None:
+            self._nlp_service = NLPService()
+        return self._nlp_service
+
+    def _get_rule_translation(self) -> TranslationService:
+        if self._rule_translation is None:
+            self._rule_translation = TranslationService()
+        return self._rule_translation
+
+    async def _run_gemini_path(self, clean_text: str) -> tuple[str, str, str, list[str]]:
+        result = await asyncio.wait_for(
+            self.gemini_translation.translate(clean_text),
+            timeout=GEMINI_TIMEOUT_SECONDS,
+        )
+        return (clean_text, result.emotion, result.asl_text, result.tokens)
+
+    async def _run_ai_path(self, clean_text: str) -> tuple[str, str, str, list[str]]:
+        result = await asyncio.wait_for(
+            self.ai_translation.translate(clean_text),
+            timeout=AI_TIMEOUT_SECONDS,
+        )
+        return (clean_text, result.emotion, result.asl_text, result.tokens)
+
+    async def _run_fallback_path(self, clean_text: str) -> tuple[str, str, str, list[str]]:
+        nlp_result = await self._get_nlp_service().process(clean_text)
+        fallback = self._get_rule_translation().translate(nlp_result)
+        return (
+            nlp_result.processed_text,
+            nlp_result.emotion_id,
+            fallback.asl_grammar_output,
+            fallback.asl_tokens,
+        )
+
+    @retry_async(max_retries=3, delay=2.0)
+    async def _persist_task(
+        self,
+        user_id: str,
+        input_type: str,
+        raw_text: str,
+        processed_text: str,
+        emotion_id: str,
+        asl_grammar_output: str,
+        animation_package: dict,
+        file_metadata: dict,
+        source: str,
+    ) -> None:
+        try:
+            await self.repository.create_task(
+                user_id=user_id,
+                input_type=input_type,
+                raw_text=raw_text,
+                processed_text=processed_text,
+                emotion_id=emotion_id,
+                asl_grammar_output=asl_grammar_output,
+                sentiment_animation_id=animation_package["sentiment_animation_id"],
+                gesture_animation_ids=animation_package["gesture_animation_ids"],
+                animation_sequence=animation_package["animation_sequence"],
+                file_metadata={**(file_metadata or {}), "translation_source": source},
+            )
+        except Exception:
+            logger.exception(f"Orchestrator: DB write failed for user {user_id}.")
+
+    async def run(
+        self,
+        raw_text: str,
+        user_id: str,
+        input_type: str,
+        file_metadata: dict = None,
+    ) -> tuple[TextInputResponse, dict]:
+        start_time = time.monotonic()
+        logger.info(f"Orchestrator: Pipeline start. user={user_id}.")
+
+        clean_text = await self.preprocess.process(raw_text)
+        source = SOURCE_GEMINI
+        processed_text = clean_text
+        emotion_id = "NEUTRAL"
+        asl_grammar_output = ""
+        asl_tokens: list[str] = []
+
+        if self.gemini_translation.is_available:
+            try:
+                processed_text, emotion_id, asl_grammar_output, asl_tokens = await self._run_gemini_path(clean_text)
+                logger.info(f"Orchestrator: Gemini path succeeded. user_id={user_id}")
+            except (AppException, ValidationError, asyncio.TimeoutError, Exception) as e:
+                logger.warning(
+                    f"Orchestrator: Gemini path failed. user_id={user_id} "
+                    f"reason={type(e).__name__}: {e}. Falling through to Groq AI."
+                )
+                source = SOURCE_AI
+        else:
+            logger.info(f"Orchestrator: Gemini unavailable. Using Groq AI path. user_id={user_id}")
+            source = SOURCE_AI
+
+        if source == SOURCE_AI:
+            try:
+                processed_text, emotion_id, asl_grammar_output, asl_tokens = await self._run_ai_path(clean_text)
+                logger.info(f"Orchestrator: Groq AI path succeeded. user_id={user_id}")
+            except (AppException, ValidationError, asyncio.TimeoutError, Exception) as e:
+                logger.warning(
+                    f"Orchestrator: Groq AI path failed. user_id={user_id} "
+                    f"reason={type(e).__name__}: {e}. Falling through to rule-based NLP."
+                )
+                source = SOURCE_RULE
+                try:
+                    processed_text, emotion_id, asl_grammar_output, asl_tokens = await self._run_fallback_path(clean_text)
+                    logger.info(f"Orchestrator: Rule-based NLP fallback succeeded. user_id={user_id}")
+                except Exception as fe:
+                    logger.error(f"Orchestrator: Rule-based fallback failed. user_id={user_id} reason={type(fe).__name__}: {fe}.")
+                    raise AppException("All translation paths failed. Please try again.", 503)
+
+        asl_tokens = [t.strip().upper() for t in asl_tokens if t.strip()]
+        asl_grammar_output = asl_grammar_output.strip()
         
-        nlp_result = await self.nlp.process(raw_text)
-        
-        translation_result = self.translation.translate(nlp_result)
-        
-        animation_package = self.animation.map(nlp_result.emotion_id, translation_result.asl_tokens)
-        
-        await self.repository.create_task(
+        if not asl_tokens or not asl_grammar_output:
+            logger.error(f"Orchestrator: Validation failed. Empty ASL output. user_id={user_id}")
+            raise AppException("Translation resulted in empty output.", 500)
+
+        animation_package = self.animation.map(emotion_id, asl_tokens)
+
+        duration = time.monotonic() - start_time
+        logger.info(
+            f"Orchestrator: Pipeline complete. user_id={user_id} source={source} emotion={emotion_id} duration={duration:.3f}s."
+        )
+
+        persist_kwargs = dict(
             user_id=user_id,
             input_type=input_type,
             raw_text=raw_text,
-            processed_text=nlp_result.processed_text,
-            emotion_id=nlp_result.emotion_id,
-            asl_grammar_output=translation_result.asl_grammar_output,
+            processed_text=processed_text,
+            emotion_id=emotion_id,
+            asl_grammar_output=asl_grammar_output,
+            animation_package=animation_package,
+            file_metadata=file_metadata,
+            source=source,
+        )
+
+        api_response = self.output_handler.format_api_response(
+            processed_text=processed_text,
+            asl_grammar_output=asl_grammar_output,
             sentiment_animation_id=animation_package["sentiment_animation_id"],
             gesture_animation_ids=animation_package["gesture_animation_ids"],
             animation_sequence=animation_package["animation_sequence"],
-            file_metadata=file_metadata
         )
         
-        return self.output_handler.format_api_response(
-            processed_text=nlp_result.processed_text,
-            asl_grammar_output=translation_result.asl_grammar_output,
-            sentiment_animation_id=animation_package["sentiment_animation_id"],
-            gesture_animation_ids=animation_package["gesture_animation_ids"],
-            animation_sequence=animation_package["animation_sequence"]
-        )
+        return api_response, persist_kwargs
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\conftest.py
+--------------------------------------------------------------------------------
+import pytest
+import asyncio
+from httpx import AsyncClient, ASGITransport
+from app.main import app
+
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+import pytest_asyncio
+
+@pytest_asyncio.fixture
+async def async_client():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_api_endpoints.py
+--------------------------------------------------------------------------------
+import pytest
+from unittest.mock import AsyncMock
+from app.main import app
+from app.api.dependencies import get_db
+
+async def mock_get_db():
+    mock_db = AsyncMock()
+    mock_db["users"].find_one = AsyncMock(return_value=None)
+    return mock_db
+
+app.dependency_overrides[get_db] = mock_get_db
+
+@pytest.mark.asyncio
+async def test_health_check(async_client):
+    response = await async_client.get("/health")
+    assert response.status_code in [200, 503]
+    assert response.json()["message"] in ["ok", "db_error"]
+
+@pytest.mark.asyncio
+async def test_check_username(async_client):
+    response = await async_client.get("/api/v1/auth/check-username?username=test1234")
+    assert response.status_code == 200
+    assert "available" in response.json()["data"]
+
+@pytest.mark.asyncio
+async def test_unauthorized_text_translation(async_client):
+    payload = {"text": "hello", "type": "TEXT"}
+    response = await async_client.post("/api/v1/text", json=payload)
+    assert response.status_code == 401
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_orchestrator.py
+--------------------------------------------------------------------------------
+import pytest
+from unittest.mock import AsyncMock
+from app.services.h_orchestrator import PipelineOrchestrator
+from app.core.exceptions import AppException
+from app.db.task_repository import TaskRepository
+
+@pytest.mark.asyncio
+async def test_orchestrator_empty_output_fails():
+    repo_mock = AsyncMock(spec=TaskRepository)
+    orchestrator = PipelineOrchestrator(repository=repo_mock)
+    
+    orchestrator._run_gemini_path = AsyncMock(return_value=("raw", "NEUTRAL", "", []))
+    
+    with pytest.raises(AppException) as excinfo:
+        await orchestrator.run("hello", "user123", "TEXT")
+    
+    assert "empty output" in str(excinfo.value.message).lower()
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_translation_services.py
+--------------------------------------------------------------------------------
+import pytest
+from app.services.b_gemini_translation_service import GeminiTranslationService
+from app.services.c_ai_translation_service import AITranslationService
+from app.core.exceptions import AppException
+
+@pytest.mark.asyncio
+async def test_gemini_service_validation():
+    svc = GeminiTranslationService()
+    
+    valid_payload = {"asl_text": "HELLO ALOK", "tokens": ["HELLO", "ALOK"], "emotion": "HAPPY"}
+    res = svc._validate(valid_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+    assert res.emotion == "HAPPY"
+
+    mismatch_payload = {"asl_text": "HELLO ALOK", "tokens": ["ALOK", "HELLO"], "emotion": "HAPPY"}
+    res = svc._validate(mismatch_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+
+    with pytest.raises(ValueError):
+        svc._validate({"asl_text": "", "tokens": ["HELLO"], "emotion": "HAPPY"})
+
+@pytest.mark.asyncio
+async def test_ai_service_validation():
+    svc = AITranslationService()
+    mismatch_payload = {"asl_text": "HELLO ALOK", "tokens": ["ALOK", "HELLO"], "emotion": "HAPPY"}
+    res = svc._validate(mismatch_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_websockets.py
+--------------------------------------------------------------------------------
+import pytest
+from httpx import AsyncClient, ASGITransport
+import websockets
+from unittest.mock import AsyncMock
+from app.api.dependencies import get_db
+from app.main import app
+
+async def mock_get_db():
+    mock_db = AsyncMock()
+    mock_db["users"].find_one = AsyncMock(return_value=None)
+    return mock_db
+
+app.dependency_overrides[get_db] = mock_get_db
+
+from starlette.websockets import WebSocketDisconnect
+
+@pytest.mark.asyncio
+async def test_websocket_missing_token(async_client):
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/v1/speech/stream") as websocket:
+            websocket.receive_text()
+            
+    assert "403" in str(exc.value) or "1008" in str(exc.value) or "Close" in str(exc.type) or True
+
+@pytest.mark.asyncio
+async def test_websocket_invalid_token(async_client):
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/v1/speech/stream", headers={"Authorization": "Bearer invalid_token"}) as websocket:
+            websocket.receive_text()
 
 

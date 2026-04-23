@@ -3758,7 +3758,7 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 
 export default function App() {
   return (
-    <GoogleOAuthProvider clientId="224125299681-9s3nh7vrdfu27t4vh00t26gn3vq0gg75.apps.googleusercontent.com">
+    <GoogleOAuthProvider clientId="224125299681-oo0mc2c1fdvgl719e2t6t560sn7491pl.apps.googleusercontent.com">
       <ThemeProvider>
         <SoundProvider>
           <ToastProvider>
@@ -3909,6 +3909,7 @@ import { History } from "./pages/History";
 import { Support } from "./pages/Support";
 import { Profile } from "./pages/Profile";
 import { Login } from "./pages/Login";
+import { ProtectedRoute } from "./components/common/ProtectedRoute";
 
 const router = createBrowserRouter([
     {
@@ -3916,12 +3917,27 @@ const router = createBrowserRouter([
         element: <MainLayout />,
         children: [
             { index: true, element: <Landing /> },
-            { path: "translate", element: <Translate /> },
-            { path: "settings", element: <Settings /> },
-            { path: "uploads", element: <Uploads /> },
-            { path: "history", element: <History /> },
+            {
+                path: "translate",
+                element: <ProtectedRoute><Translate /></ProtectedRoute>,
+            },
+            {
+                path: "settings",
+                element: <ProtectedRoute><Settings /></ProtectedRoute>,
+            },
+            {
+                path: "uploads",
+                element: <ProtectedRoute><Uploads /></ProtectedRoute>,
+            },
+            {
+                path: "history",
+                element: <ProtectedRoute><History /></ProtectedRoute>,
+            },
             { path: "support", element: <Support /> },
-            { path: ":userId", element: <Profile /> },
+            {
+                path: ":userId",
+                element: <ProtectedRoute><Profile /></ProtectedRoute>,
+            },
         ],
     },
     {
@@ -3931,7 +3947,7 @@ const router = createBrowserRouter([
     {
         path: "*",
         element: <Navigate to="/" replace />,
-    }
+    },
 ]);
 
 export function AppRouter() {
@@ -4782,6 +4798,25 @@ export function Label({ className, children, ...props }) {
 
 
 --------------------------------------------------------------------------------
+FILE: frontend\t81-frontend\src\components\common\ProtectedRoute.jsx
+--------------------------------------------------------------------------------
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
+
+
+export function ProtectedRoute({ children }) {
+    const { isLoggedIn } = useAuth();
+    const location = useLocation();
+
+    if (!isLoggedIn) {
+        return <Navigate to="/login" state={{ from: location }} replace />;
+    }
+
+    return children;
+}
+
+
+--------------------------------------------------------------------------------
 FILE: frontend\t81-frontend\src\components\layout\Footer.jsx
 --------------------------------------------------------------------------------
 import { Github, Twitter, Linkedin } from "lucide-react";
@@ -5252,16 +5287,18 @@ export function Sidebar({ collapsed, setCollapsed, isMobile, isOpen, setIsOpen }
 --------------------------------------------------------------------------------
 FILE: frontend\t81-frontend\src\context\AuthContext.jsx
 --------------------------------------------------------------------------------
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { api } from "../services/api";
 
 const AuthContext = createContext({
     isLoggedIn: false,
     user: null,
     jwt: null,
-    login: async (email, password) => { },
-    register: async (name, email, password) => { },
-    googleLogin: async (accessToken) => { },
-    logout: () => { },
+    login: async () => {},
+    register: async () => {},
+    googleLogin: async () => {},
+    logout: () => {},
+    updateUserState: () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -5270,141 +5307,67 @@ export const AuthProvider = ({ children }) => {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [jwt, setJwt] = useState(null);
     const [user, setUser] = useState(null);
-    const API_URL = `${import.meta.env.VITE_API_URL}`;
 
-    const fetchUserProfile = async (token) => {
+    const logout = useCallback(() => {
+        localStorage.removeItem("sf_jwt");
+        setJwt(null);
+        setIsLoggedIn(false);
+        setUser(null);
+    }, []);
+
+    const fetchUserProfile = useCallback(async () => {
         try {
-            const response = await fetch(`${API_URL}/auth/me`, {
-                headers: {
-                    "Authorization": `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                const userData = await response.json();
-                setUser(userData);
-            } else {
-
+            const userData = await api.get("/auth/me");
+            setUser(userData);
+        } catch (e) {
+            if (e.message === "SESSION_EXPIRED") {
                 logout();
             }
-        } catch (e) {
-            console.error("Failed to fetch user profile:", e);
         }
-    };
+    }, [logout]);
 
     useEffect(() => {
         const storedToken = localStorage.getItem("sf_jwt");
         if (storedToken) {
             setJwt(storedToken);
             setIsLoggedIn(true);
-            setUser({ email: "Loading Profile...", full_name: "Loading..." });
-            fetchUserProfile(storedToken);
+            setUser({ email: "Loading...", full_name: "Loading..." });
+            fetchUserProfile();
         }
-    }, []);
+    }, [fetchUserProfile]);
 
-    const login = async (email, password) => {
-        const formData = new URLSearchParams();
-        formData.append("username", email);
-        formData.append("password", password);
-
-        const response = await fetch(`${API_URL}/auth/login`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: formData.toString()
-        });
-
-        if (!response.ok) {
-            try {
-                const err = await response.json();
-                let errorMessage = "Login failed";
-                if (Array.isArray(err.detail)) errorMessage = err.detail[0].msg;
-                else if (typeof err.detail === 'string') errorMessage = err.detail;
-                throw new Error(errorMessage);
-            } catch (e) {
-                throw new Error(e.message || "Failed to parse error from server");
-            }
-        }
-
-        const data = await response.json();
-        const token = data.access_token;
-
+    const _applyToken = (token) => {
         localStorage.setItem("sf_jwt", token);
         setJwt(token);
         setIsLoggedIn(true);
-        fetchUserProfile(token);
+    };
+
+    const login = async (email, password) => {
+        const formBody = new URLSearchParams();
+        formBody.append("username", email);
+        formBody.append("password", password);
+
+        const data = await api.postForm("/auth/login", formBody.toString());
+        _applyToken(data.access_token);
+        await fetchUserProfile();
         return true;
     };
 
     const register = async (name, email, password) => {
-        const response = await fetch(`${API_URL}/auth/register`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                full_name: name,
-                email: email,
-                password: password
-            })
-        });
-
-        if (!response.ok) {
-            try {
-                const err = await response.json();
-                let errorMessage = "Registration failed";
-                if (Array.isArray(err.detail)) errorMessage = err.detail[0].msg;
-                else if (typeof err.detail === 'string') errorMessage = err.detail;
-                throw new Error(errorMessage);
-            } catch (e) {
-                throw new Error(e.message || "Failed to parse error from server");
-            }
-        }
-
+        await api.post("/auth/register", { full_name: name, email, password });
         await login(email, password);
         return { isNew: true };
     };
 
     const googleLogin = async (accessToken) => {
-        const response = await fetch(`${API_URL}/auth/google`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ access_token: accessToken })
-        });
-
-        if (!response.ok) {
-            try {
-                const err = await response.json();
-                let errorMessage = "Google Login failed";
-                if (Array.isArray(err.detail)) errorMessage = err.detail[0].msg;
-                else if (typeof err.detail === 'string') errorMessage = err.detail;
-                throw new Error(errorMessage);
-            } catch (e) {
-                throw new Error(e.message || "Failed to parse error from server");
-            }
-        }
-
-        const data = await response.json();
-        const token = data.access_token;
-
-        localStorage.setItem("sf_jwt", token);
-        setJwt(token);
-        setIsLoggedIn(true);
-        fetchUserProfile(token);
+        const data = await api.post("/auth/google", { access_token: accessToken });
+        _applyToken(data.access_token);
+        await fetchUserProfile();
         return { isNew: data.is_new_user === true };
     };
 
-    const logout = () => {
-        localStorage.removeItem("sf_jwt");
-        setJwt(null);
-        setIsLoggedIn(false);
-        setUser(null);
-    };
-
     const updateUserState = (newData) => {
-        setUser(prev => ({ ...prev, ...newData }));
+        setUser((prev) => ({ ...prev, ...newData }));
     };
 
     return (
@@ -5601,57 +5564,48 @@ import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useToast } from "../context/ToastContext";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { api } from "../services/api";
 
 export function History() {
     useDocumentTitle("History");
-    const { isLoggedIn, jwt } = useAuth();
+    const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
 
     const [historyList, setHistoryList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const toastRef = useRef(addToast);
 
     useEffect(() => {
         if (!isLoggedIn) return;
         const fetchHistory = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/history`, {
-                    headers: { "Authorization": `Bearer ${jwt}` }
-                });
-                if (!response.ok) throw new Error("Failed to fetch history");
-
-                const data = await response.json();
-                const formattedData = data.map(item => ({
+                const data = await api.get("/history");
+                const formattedData = data.map((item) => ({
                     ...item,
-                    date: item.date ? new Date(item.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown Date'
+                    date: item.date
+                        ? new Date(item.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+                        : "Unknown Date",
                 }));
                 setHistoryList(formattedData);
             } catch (error) {
-                console.error(error);
-                addToast("Failed to load history", "error");
+                toastRef.current({ title: "Failed to load history", description: error.message, type: "error" });
             } finally {
                 setIsLoading(false);
             }
         };
         fetchHistory();
-    }, [isLoggedIn, jwt, addToast]);
+    }, [isLoggedIn]);
 
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/history/${id}`, {
-                method: "DELETE",
-                headers: {
-                    "Authorization": `Bearer ${jwt}`
-                }
-            });
-            if (!response.ok) throw new Error("Failed to delete history item");
-            setHistoryList(historyList.filter(item => item.id !== id));
-            addToast("History item deleted", "success");
+            await api.delete(`/history/${id}`);
+            setHistoryList((prev) => prev.filter((item) => item.id !== id));
+            addToast({ title: "History item deleted", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast("Failed to delete history item", "error");
+            addToast({ title: "Failed to delete history item", description: error.message, type: "error" });
         }
     };
 
@@ -5670,7 +5624,7 @@ export function History() {
                     <h3 className="text-2xl font-bold">Login to view history</h3>
                     <p className="text-[var(--text-secondary)] max-w-md mx-auto">Securely access all your past grammar translations and replay 3D animations anytime.</p>
                     <div className="flex justify-center gap-4">
-                        <Button onClick={() => navigate('/login')}>Log In / Sign Up</Button>
+                        <Button onClick={() => navigate("/login")}>Log In / Sign Up</Button>
                     </div>
                 </Card>
             ) : (
@@ -5686,42 +5640,52 @@ export function History() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-[var(--border-color)]">
-                                {historyList.map((item) => (
-                                    <tr key={item.id} className="hover:bg-[var(--bg-background)]/50 transition-colors group">
-                                        <td className="p-4">
-                                            <div className="flex items-start gap-3">
-                                                <MessageSquare size={16} className="mt-1 text-[var(--text-secondary)] opacity-50 flex-shrink-0" />
-                                                <p className="text-[var(--text-primary)] font-medium line-clamp-2">{item.text}</p>
-                                            </div>
-                                        </td>
-                                        <td className="p-4">
-                                            <code className="text-[var(--primary)] bg-[var(--primary)]/10 px-2 py-1 rounded text-sm font-bold tracking-wide">{item.asl}</code>
-                                        </td>
-                                        <td className="p-4 text-[var(--text-secondary)] text-sm whitespace-nowrap">{item.date}</td>
-                                        <td className="p-4 text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => navigate('/translate')}
-                                                    className="group-hover:border-[var(--primary)] group-hover:text-[var(--primary)] transition-colors"
-                                                >
-                                                    <Play size={14} className="mr-2" />
-                                                    See Animation
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={(e) => handleDelete(e, item.id)}
-                                                    className="text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors px-2"
-                                                    title="Delete History"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </Button>
-                                            </div>
-                                        </td>
+                                {isLoading ? (
+                                    <tr>
+                                        <td colSpan={4} className="p-8 text-center text-[var(--text-secondary)]">Loading...</td>
                                     </tr>
-                                ))}
+                                ) : historyList.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={4} className="p-8 text-center text-[var(--text-secondary)]">No translation history yet.</td>
+                                    </tr>
+                                ) : (
+                                    historyList.map((item) => (
+                                        <tr key={item.id} className="hover:bg-[var(--bg-background)]/50 transition-colors group">
+                                            <td className="p-4">
+                                                <div className="flex items-start gap-3">
+                                                    <MessageSquare size={16} className="mt-1 text-[var(--text-secondary)] opacity-50 flex-shrink-0" />
+                                                    <p className="text-[var(--text-primary)] font-medium line-clamp-2">{item.text}</p>
+                                                </div>
+                                            </td>
+                                            <td className="p-4">
+                                                <code className="text-[var(--primary)] bg-[var(--primary)]/10 px-2 py-1 rounded text-sm font-bold tracking-wide">{item.asl}</code>
+                                            </td>
+                                            <td className="p-4 text-[var(--text-secondary)] text-sm whitespace-nowrap">{item.date}</td>
+                                            <td className="p-4 text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => navigate("/translate")}
+                                                        className="group-hover:border-[var(--primary)] group-hover:text-[var(--primary)] transition-colors"
+                                                    >
+                                                        <Play size={14} className="mr-2" />
+                                                        See Animation
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={(e) => handleDelete(e, item.id)}
+                                                        className="text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors px-2"
+                                                        title="Delete History"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </Button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
                     </div>
@@ -6646,19 +6610,20 @@ export function Login() {
 --------------------------------------------------------------------------------
 FILE: frontend\t81-frontend\src\pages\Profile.jsx
 --------------------------------------------------------------------------------
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "../components/common/Card";
 import { Button } from "../components/common/Button";
-import { User, Mail, Calendar, LogOut, Edit2, Save, X, Phone, Instagram, FileText, Loader2, Twitter, Linkedin, Github, Link as LinkIcon, Camera, Trash2, Hash, Check, Eye, EyeOff } from "lucide-react";
+import { User, Mail, Calendar, LogOut, Edit2, Save, X, Phone, FileText, Loader2, Camera, Trash2, Hash, Check, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import zxcvbn from "zxcvbn";
 import { useToast } from "../context/ToastContext";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { api } from "../services/api";
 
 export function Profile() {
     useDocumentTitle("Profile");
-    const { isLoggedIn, user, logout, jwt, updateUserState } = useAuth();
+    const { isLoggedIn, user, logout, updateUserState } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -6667,27 +6632,28 @@ export function Profile() {
     const [isSaving, setIsSaving] = useState(false);
     const [isChangingPassword, setIsChangingPassword] = useState(false);
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-    
+
     const [stats, setStats] = useState({ translations: 0, saved_items: 0, plan: "free", isLoading: true });
     const [editForm, setEditForm] = useState({
         full_name: user?.full_name || "",
         username: user?.username || "",
         bio: user?.bio || "",
-        phone_number: user?.phone_number || ""
+        phone_number: user?.phone_number || "",
     });
 
     const [usernameAvailable, setUsernameAvailable] = useState(null);
     const [isCheckingUsername, setIsCheckingUsername] = useState(false);
 
-    const [showCurrentPassword, setShowCurrentPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     const [passwordForm, setPasswordForm] = useState({
         current_password: "",
         new_password: "",
-        confirm_password: ""
+        confirm_password: "",
     });
+
+    const addToastRef = useRef(addToast);
 
     useEffect(() => {
         if (user) {
@@ -6695,29 +6661,23 @@ export function Profile() {
                 full_name: user.full_name || "",
                 username: user.username || "",
                 bio: user.bio || "",
-                phone_number: user.phone_number || ""
+                phone_number: user.phone_number || "",
             });
         }
     }, [user]);
 
     useEffect(() => {
-        if (!isLoggedIn || !jwt) return;
+        if (!isLoggedIn) return;
         const fetchStats = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/stats`, {
-                    headers: { "Authorization": `Bearer ${jwt}` }
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    setStats({ ...data, isLoading: false });
-                }
-            } catch (error) {
-                console.error("Failed to load stats", error);
-                setStats(prev => ({ ...prev, isLoading: false }));
+                const data = await api.get("/auth/me/stats");
+                setStats({ ...data, isLoading: false });
+            } catch (_) {
+                setStats((prev) => ({ ...prev, isLoading: false }));
             }
         };
         fetchStats();
-    }, [isLoggedIn, jwt]);
+    }, [isLoggedIn]);
 
     useEffect(() => {
         if (!isEditing) return;
@@ -6737,13 +6697,10 @@ export function Profile() {
         const checkAvailability = async () => {
             setIsCheckingUsername(true);
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/check-username?username=${editForm.username}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setUsernameAvailable(data.available);
-                }
-            } catch (error) {
-                console.error("Username check failed", error);
+                const data = await api.get(`/auth/check-username?username=${editForm.username}`);
+                setUsernameAvailable(data.available);
+            } catch (_) {
+                setUsernameAvailable(null);
             } finally {
                 setIsCheckingUsername(false);
             }
@@ -6758,7 +6715,7 @@ export function Profile() {
             full_name: user?.full_name || "",
             username: user?.username || "",
             bio: user?.bio || "",
-            phone_number: user?.phone_number || ""
+            phone_number: user?.phone_number || "",
         });
         setIsEditing(true);
     };
@@ -6772,31 +6729,11 @@ export function Profile() {
         formData.append("file", file);
 
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/avatar`, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: formData
-            });
-
-            if (!response.ok) {
-                let errorMsg = "Failed to upload avatar";
-                try {
-                    const errData = await response.json();
-                    if (errData.detail) errorMsg = typeof errData.detail === 'string' ? errData.detail : errData.detail[0].msg;
-                } catch (e) {
-                    errorMsg = "Network error. The file might be too large.";
-                }
-                throw new Error(errorMsg);
-            }
-
-            const updatedData = await response.json();
+            const updatedData = await api.postMultipart("/auth/me/avatar", formData);
             updateUserState(updatedData);
-            addToast("Profile picture updated", "success");
+            addToastRef.current({ title: "Profile picture updated", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast(error.message || "Failed to upload profile picture", "error");
+            addToastRef.current({ title: error.message || "Failed to upload profile picture", type: "error" });
         } finally {
             setIsUploadingAvatar(false);
             e.target.value = null;
@@ -6806,23 +6743,11 @@ export function Profile() {
     const handleRemoveAvatar = async () => {
         setIsUploadingAvatar(true);
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify({ profile_picture_url: "" })
-            });
-
-            if (!response.ok) throw new Error("Failed to remove avatar");
-
-            const updatedData = await response.json();
+            const updatedData = await api.put("/auth/me", { profile_picture_url: "" });
             updateUserState(updatedData);
-            addToast("Profile picture removed", "success");
+            addToastRef.current({ title: "Profile picture removed", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast("Failed to remove profile picture", "error");
+            addToastRef.current({ title: error.message || "Failed to remove profile picture", type: "error" });
         } finally {
             setIsUploadingAvatar(false);
         }
@@ -6831,7 +6756,6 @@ export function Profile() {
     const handleSave = async () => {
         setIsSaving(true);
         try {
-
             if (passwordForm.current_password || passwordForm.new_password) {
                 if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
                     throw new Error("Please fill out all password fields, or leave them entirely blank to keep your current password.");
@@ -6841,56 +6765,22 @@ export function Profile() {
                 }
 
                 setIsChangingPassword(true);
-                const pwdResponse = await fetch(`${import.meta.env.VITE_API_URL}/auth/password`, {
-                    method: "PUT",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${jwt}`
-                    },
-                    body: JSON.stringify({
-                        current_password: passwordForm.current_password,
-                        new_password: passwordForm.new_password
-                    })
+                await api.put("/auth/password", {
+                    current_password: passwordForm.current_password,
+                    new_password: passwordForm.new_password,
                 });
-
-                if (!pwdResponse.ok) {
-                    const errData = await pwdResponse.json();
-                    let errMsg = "Failed to update password";
-                    if (Array.isArray(errData.detail)) errMsg = errData.detail[0].msg;
-                    else if (typeof errData.detail === 'string') errMsg = errData.detail;
-                    throw new Error(errMsg);
-                }
             }
 
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify(editForm)
-            });
-
-            if (!response.ok) {
-                const errData = await response.json();
-                let errMsg = "Failed to update profile";
-                if (Array.isArray(errData.detail)) errMsg = errData.detail[0].msg;
-                else if (typeof errData.detail === 'string') errMsg = errData.detail;
-                throw new Error(errMsg);
-            }
-
-            const updatedData = await response.json();
+            const updatedData = await api.put("/auth/me", editForm);
             updateUserState(updatedData);
 
             setPasswordForm({ current_password: "", new_password: "", confirm_password: "" });
             setIsEditing(false);
-            navigate('/profile', { replace: true });
+            navigate("/profile", { replace: true });
 
-            addToast("Profile updated successfully", "success");
+            addToast({ title: "Profile updated successfully", type: "success" });
         } catch (error) {
-            console.error(error);
-            const errBody = error.message === "Failed to fetch" ? "Network Error" : error.message;
-            addToast(errBody || "Failed to save profile changes", "error");
+            addToast({ title: error.message || "Failed to save profile changes", type: "error" });
         } finally {
             setIsSaving(false);
             setIsChangingPassword(false);
@@ -6904,7 +6794,7 @@ export function Profile() {
                     <User size={64} className="mx-auto text-zinc-400" />
                     <h2 className="text-2xl font-bold">Unauthenticated</h2>
                     <p className="text-[var(--text-secondary)]">Please log in to view your profile.</p>
-                    <Button onClick={() => navigate('/login')}>Go to Login</Button>
+                    <Button onClick={() => navigate("/login")}>Go to Login</Button>
                 </Card>
             </div>
         );
@@ -6985,8 +6875,8 @@ export function Profile() {
                                     </div>
                                 </div>
                                 <div className="flex gap-4 justify-center md:justify-start pt-4 border-t border-[var(--border-color)]">
-                                    <Button variant="outline" onClick={() => navigate('/settings')}>Preferences</Button>
-                                    <Button variant="ghost" className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => { logout(); navigate('/'); }}>
+                                    <Button variant="outline" onClick={() => navigate("/settings")}>Preferences</Button>
+                                    <Button variant="ghost" className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => { logout(); navigate("/"); }}>
                                         <LogOut size={16} className="mr-2" /> Logout
                                     </Button>
                                 </div>
@@ -7014,9 +6904,7 @@ export function Profile() {
                                             ) : usernameAvailable === false ? (
                                                 <span className="flex items-center gap-1 text-red-500">
                                                     <X size={12} />
-                                                    {(!editForm.username || editForm.username.length < 5 || editForm.username.length > 20)
-                                                        ? '5-20 Chars'
-                                                        : 'Unavailable'}
+                                                    {(!editForm.username || editForm.username.length < 5 || editForm.username.length > 20) ? "5-20 Chars" : "Unavailable"}
                                                 </span>
                                             ) : null}
                                         </label>
@@ -7024,7 +6912,7 @@ export function Profile() {
                                             type="text"
                                             maxLength={20}
                                             minLength={5}
-                                            className={`w-full bg-[var(--bg-surface)] border ${usernameAvailable === false ? 'border-red-500 focus:ring-red-500' : 'border-[var(--border-color)] focus:ring-[var(--primary)]'} rounded-lg px-4 py-2 focus:ring-2 outline-none transition-colors`}
+                                            className={`w-full bg-[var(--bg-surface)] border ${usernameAvailable === false ? "border-red-500 focus:ring-red-500" : "border-[var(--border-color)] focus:ring-[var(--primary)]"} rounded-lg px-4 py-2 focus:ring-2 outline-none transition-colors`}
                                             value={editForm.username}
                                             onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
                                         />
@@ -7047,9 +6935,6 @@ export function Profile() {
                                             value={editForm.phone_number}
                                             onChange={(e) => setEditForm({ ...editForm, phone_number: e.target.value })}
                                         />
-                                    </div>
-                                    <div className="flex items-center">
-                                        { }
                                     </div>
                                 </div>
                                 <div>
@@ -7081,9 +6966,7 @@ export function Profile() {
                                                         type={showNewPassword ? "text" : "password"}
                                                         className="w-full bg-[var(--bg-background)] border border-[var(--border-color)] rounded-lg px-4 py-2 focus:ring-2 focus:ring-[var(--primary)] outline-none transition-all pr-10"
                                                         value={passwordForm.new_password}
-                                                        onChange={(e) => {
-                                                            setPasswordForm({ ...passwordForm, new_password: e.target.value });
-                                                        }}
+                                                        onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
                                                     />
                                                     <button
                                                         type="button"
@@ -7093,30 +6976,28 @@ export function Profile() {
                                                         {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                                     </button>
                                                 </div>
-
-                                                { }
                                                 {passwordForm.new_password && (
                                                     <div className="mt-2 text-xs">
                                                         <div className="flex justify-between mb-1">
                                                             <span className="text-zinc-500">Security Requirement:</span>
-                                                            <span className={zxcvbn(passwordForm.new_password).score > 2 ? 'text-green-500' : 'text-orange-500'}>
-                                                                {['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'][zxcvbn(passwordForm.new_password).score]}
+                                                            <span className={zxcvbn(passwordForm.new_password).score > 2 ? "text-green-500" : "text-orange-500"}>
+                                                                {["Very Weak", "Weak", "Fair", "Good", "Strong"][zxcvbn(passwordForm.new_password).score]}
                                                             </span>
                                                         </div>
                                                         <ul className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1 text-zinc-500 uppercase font-semibold text-[10px]">
-                                                            <li className={`flex items-center gap-1 ${passwordForm.new_password.length >= 8 ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${passwordForm.new_password.length >= 8 ? "text-green-500" : ""}`}>
                                                                 {passwordForm.new_password.length >= 8 ? <Check size={10} /> : <X size={10} />} 8+ Chars
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[A-Z]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[A-Z]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[A-Z]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} UPPERCASE
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[a-z]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[a-z]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[a-z]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} LOWERCASE
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[0-9]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[0-9]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[0-9]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} NUMBER
                                                             </li>
-                                                            <li className={`flex items-center gap-1 col-span-2 ${/[@$!%*?&]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 col-span-2 ${/[@$!%*?&]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[@$!%*?&]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} SPECIAL CHAR (@$!%*?&)
                                                             </li>
                                                         </ul>
@@ -7154,7 +7035,6 @@ export function Profile() {
                                 </div>
                             </div>
                         )}
-
                     </div>
                 </div>
             </Card>
@@ -7446,19 +7326,18 @@ import { Keyboard, Mic, FileText, Send, Loader2, Volume2, User, Play, Square, Se
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { api } from "../services/api";
 
 export function Translate() {
     useDocumentTitle("App");
-    const { jwt, user, isLoggedIn } = useAuth();
+    const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
 
-    const [activeTab, setActiveTab] = useState('text');
+    const [activeTab, setActiveTab] = useState("text");
     const [inputText, setInputText] = useState("");
     const [isTranslating, setIsTranslating] = useState(false);
 
-    const [outputText, setOutputText] = useState("");
     const [outputAsl, setOutputAsl] = useState("");
-
     const [isListening, setIsListening] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
     const fileInputRef = useRef(null);
@@ -7477,7 +7356,7 @@ export function Translate() {
             return;
         }
 
-        if (!('webkitSpeechRecognition' in window)) {
+        if (!("webkitSpeechRecognition" in window)) {
             addToast({ title: "Speech Recognition Unavailable", description: "Your browser does not support Speech-to-Text.", type: "error" });
             return;
         }
@@ -7485,7 +7364,7 @@ export function Translate() {
         const recognition = new window.webkitSpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang = "en-US";
 
         recognition.onstart = () => setIsListening(true);
         recognition.onresult = (event) => {
@@ -7505,87 +7384,101 @@ export function Translate() {
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        setSelectedFile(file);
 
-        if (file.name.endsWith('.txt')) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                setInputText(ev.target.result);
-                addToast({ title: "File Loaded", description: "Text extracted from " + file.name, type: "success" });
-                setActiveTab('text');
-            };
-            reader.readAsText(file);
-        } else {
-            addToast({ title: "File Selected", description: file.name + " ready for upload.", type: "info" });
-            setInputText(`[Document Uploaded: ${file.name}]`);
+        if (!file.name.endsWith(".txt")) {
+            addToast({ title: "Unsupported File", description: "Only .txt files can be processed. PDF and DOCX support coming soon.", type: "error" });
+            return;
         }
+
+        setSelectedFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const extracted = ev.target.result.slice(0, 2000);
+            setInputText(extracted);
+            addToast({ title: "File Loaded", description: "Text extracted from " + file.name, type: "success" });
+            setActiveTab("text");
+        };
+        reader.readAsText(file);
     };
 
     const handleTextSubmit = async () => {
         if (!inputText.trim()) return;
         setIsTranslating(true);
 
-        const payloadType = activeTab === 'document' ? 'DOCUMENT' : activeTab === 'speech' ? 'SPEECH' : 'TEXT';
-        const filename = selectedFile && activeTab === 'document' ? selectedFile.name : null;
+        const payloadType = activeTab === "document" ? "DOCUMENT" : activeTab === "speech" ? "SPEECH" : "TEXT";
+        const filename = selectedFile && activeTab === "document" ? selectedFile.name : null;
 
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/text`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify({
-                    text: inputText,
-                    type: payloadType,
-                    filename: filename
-                })
+            const data = await api.post("/text", {
+                text: inputText.trim(),
+                type: payloadType,
+                ...(filename && { filename }),
             });
 
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || "Translation failed");
-            }
-
-            const data = await response.json();
-
-            setOutputText(data.processed_text || inputText);
-            setOutputAsl(data.asl_grammar_output || "NO_ASL_DATA");
-            setAnimationSequence(data.animation_sequence || []);
+            const newSequence = data.animation_sequence || [];
+            setOutputAsl(data.asl_grammar_output || "");
+            setAnimationSequence(newSequence);
             setSentimentId(data.sentiment_animation_id || "sa003");
             setCurrentWordIndex(-1);
             setIsPlaying(false);
-            
+
             addToast({ title: "Translation successful", type: "success" });
 
+            if (newSequence.length > 0) {
+                setTimeout(() => {
+                    setIsPlaying(true);
+                    setCurrentWordIndex(0);
+                    let idx = 0;
+                    const step = () => {
+                        setCurrentWordIndex(idx);
+                        const item = newSequence[idx];
+                        const gestureCount = (item.gesture_animation_ids || []).length;
+                        const duration = Math.max(800, gestureCount * 1000);
+                        idx += 1;
+                        if (idx < newSequence.length) {
+                            setTimeout(step, duration);
+                        } else {
+                            setTimeout(() => {
+                                setCurrentWordIndex(-1);
+                                setIsPlaying(false);
+                            }, duration);
+                        }
+                    };
+                    step();
+                }, 300);
+            }
+
         } catch (error) {
-            addToast({ title: "Translation Error", description: error.message, type: "error" });
+            const msg = error.message === "SESSION_EXPIRED"
+                ? "Your session has expired. Please log in again."
+                : error.message;
+            addToast({ title: "Translation Error", description: msg, type: "error" });
         } finally {
             setIsTranslating(false);
         }
     };
-    
+
     const playAnimationSync = async () => {
         if (animationSequence.length === 0 || isPlaying) return;
         setIsPlaying(true);
         setCurrentWordIndex(0);
-        
+
         for (let i = 0; i < animationSequence.length; i++) {
             setCurrentWordIndex(i);
             const item = animationSequence[i];
-            
-            const playbackDuration = item.gesture_ids.length * 1000;
-            await new Promise(resolve => setTimeout(resolve, Math.max(800, playbackDuration)));
+            const gestureCount = (item.gesture_animation_ids || []).length;
+            const playbackDuration = gestureCount * 1000;
+            await new Promise((resolve) => setTimeout(resolve, Math.max(800, playbackDuration)));
         }
-        
+
         setCurrentWordIndex(-1);
         setIsPlaying(false);
     };
 
     const TABS = [
-        { id: 'text', label: 'Text Input', icon: Keyboard },
-        { id: 'speech', label: 'Speech', icon: Mic },
-        { id: 'document', label: 'Document', icon: FileText }
+        { id: "text", label: "Text Input", icon: Keyboard },
+        { id: "speech", label: "Speech", icon: Mic },
+        { id: "document", label: "Document", icon: FileText },
     ];
 
     if (!isLoggedIn) {
@@ -7593,7 +7486,7 @@ export function Translate() {
             <div className="flex flex-col items-center justify-center p-12 text-center">
                 <h2 className="text-2xl font-bold mb-4 text-[var(--text-primary)]">Authentication Required</h2>
                 <p className="text-[var(--text-secondary)] mb-6">Please log in to use the translation application.</p>
-                <Button onClick={() => window.location.href = '/login'}>Go to Login</Button>
+                <Button onClick={() => window.location.href = "/login"}>Go to Login</Button>
             </div>
         );
     }
@@ -7624,7 +7517,7 @@ export function Translate() {
                 <div className="flex-1 bg-[var(--bg-background)] relative overflow-hidden">
                     <div
                         className="absolute inset-0 flex transition-transform duration-500 ease-in-out"
-                        style={{ transform: `translateX(-${['text', 'speech', 'document'].indexOf(activeTab) * 100}%)` }}
+                        style={{ transform: `translateX(-${["text", "speech", "document"].indexOf(activeTab) * 100}%)` }}
                     >
                         <div className="w-full h-full flex-shrink-0 flex flex-col p-4 md:p-6">
                             <div className="relative flex-1 w-full">
@@ -7666,7 +7559,7 @@ export function Translate() {
                                 )}
                             </div>
                             <div className="flex items-center justify-between mt-4">
-                                <span className="text-xs text-[var(--text-secondary)]">{inputText.length} characters</span>
+                                <span className="text-xs text-[var(--text-secondary)]">{inputText.length} / 2000 characters</span>
                                 <Button
                                     onClick={handleTextSubmit}
                                     disabled={!inputText.trim() || isTranslating}
@@ -7681,7 +7574,7 @@ export function Translate() {
                             <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
                                 <div
                                     onClick={toggleListening}
-                                    className={`w-24 h-24 rounded-full flex items-center justify-center relative cursor-pointer transition-colors shadow-lg ${isListening ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20' : 'bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/20'}`}
+                                    className={`w-24 h-24 rounded-full flex items-center justify-center relative cursor-pointer transition-colors shadow-lg ${isListening ? "bg-red-500/10 text-red-500 hover:bg-red-500/20" : "bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/20"}`}
                                 >
                                     <Mic size={40} className={isListening ? "animate-pulse" : ""} />
                                     {isListening && <div className="absolute inset-0 rounded-full border border-red-500 animate-ping opacity-20"></div>}
@@ -7698,7 +7591,7 @@ export function Translate() {
                                 />
                                 <div className="flex gap-4">
                                     <Button variant="outline" onClick={toggleListening} className="rounded-full px-6">{isListening ? "Stop" : "Start"} Recording</Button>
-                                    <Button onClick={() => setActiveTab('text')} className="rounded-full px-6">Review & Translate</Button>
+                                    <Button onClick={() => setActiveTab("text")} className="rounded-full px-6">Review & Translate</Button>
                                 </div>
                             </div>
                         </div>
@@ -7709,7 +7602,7 @@ export function Translate() {
                                 ref={fileInputRef}
                                 onChange={handleFileChange}
                                 className="hidden"
-                                accept=".txt,.pdf,.docx"
+                                accept=".txt"
                             />
                             <Card
                                 onClick={() => fileInputRef.current?.click()}
@@ -7719,7 +7612,7 @@ export function Translate() {
                                     <Upload size={28} />
                                 </div>
                                 <h3 className="text-lg font-bold">Upload a Document</h3>
-                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">PDF, DOCX, or TXT files supported.</p>
+                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">TXT files supported. Text is extracted client-side.</p>
                                 <Button size="sm" type="button" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>Select File</Button>
                                 {selectedFile && (
                                     <div className="flex items-center gap-2 mt-4 bg-[var(--bg-surface)] px-4 py-2 border border-[var(--border-color)] rounded-lg shadow-sm">
@@ -7749,7 +7642,7 @@ export function Translate() {
                     <div className="text-zinc-500 dark:text-zinc-600 flex flex-col items-center">
                         <User size={64} className="mb-4" />
                         <p className="text-xl font-mono opacity-50">{isPlaying ? "Avatar Sync Active" : "3D Avatar Core Offline"}</p>
-                        
+
                         {isPlaying && currentWordIndex >= 0 && animationSequence[currentWordIndex] && (
                             <div className="mt-4 flex flex-col items-center animate-in fade-in zoom-in duration-300">
                                 <span className="text-sm font-bold text-[var(--primary)]">Rendering 3D Gestures & Sentiments:</span>
@@ -7759,7 +7652,7 @@ export function Translate() {
                                             {sentimentId}
                                         </span>
                                     )}
-                                    {animationSequence[currentWordIndex].gesture_ids.map((gid, i) => (
+                                    {(animationSequence[currentWordIndex].gesture_animation_ids || []).map((gid, i) => (
                                         <span key={i} className="px-3 py-1.5 bg-[var(--primary)]/10 border border-[var(--primary)]/30 text-[var(--primary)] font-mono rounded-md shadow-sm text-sm">
                                             {gid}
                                         </span>
@@ -7779,12 +7672,12 @@ export function Translate() {
                     </div>
 
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-black/50 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => {setIsPlaying(false); setCurrentWordIndex(-1);}}><Square size={18} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => { setIsPlaying(false); setCurrentWordIndex(-1); }}><Square size={18} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
                         <button className="text-white hover:text-[var(--primary)] transition-colors scale-125" onClick={playAnimationSync}><Play size={24} fill="currentColor" /></button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
                         <div className="w-32 h-1 bg-white/20 rounded-full cursor-pointer overflow-hidden">
-                            <div 
+                            <div
                                 className="h-full bg-[var(--primary)] transition-all duration-300 relative"
                                 style={{ width: `${animationSequence.length > 0 && currentWordIndex >= 0 ? ((currentWordIndex + 1) / animationSequence.length) * 100 : 0}%` }}
                             >
@@ -7800,40 +7693,37 @@ export function Translate() {
                             Synced Output
                         </span>
                     </div>
-                    
+
                     {animationSequence.length > 0 ? (
                         <div className="flex flex-col h-full space-y-4">
                             <div className="flex-1 p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner relative flex items-center justify-center overflow-x-hidden min-h-[140px]">
-                                
                                 <div className="flex gap-6 items-center flex-nowrap w-full overflow-hidden justify-center relative px-8 mask-edges">
                                     {animationSequence.map((item, index) => {
                                         const isCurrent = currentWordIndex === index;
                                         const distance = Math.abs(currentWordIndex === -1 ? 0 : currentWordIndex - index);
-                                        
+
                                         if (currentWordIndex !== -1 && distance > 5) return null;
-                                        
+
                                         return (
-                                            <span 
-                                                key={index} 
-                                                className={`font-mono transition-all duration-300 select-none ${
-                                                    isCurrent 
-                                                        ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10" 
-                                                        : currentWordIndex === -1
-                                                            ? "text-[var(--text-secondary)] text-lg"
-                                                            : `text-[var(--text-secondary)] font-medium ${distance > 2 ? 'opacity-20 text-sm' : 'opacity-60 text-lg'} blur-[0.5px]`
-                                                }`}
+                                            <span
+                                                key={index}
+                                                className={`font-mono transition-all duration-300 select-none ${isCurrent
+                                                    ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10"
+                                                    : currentWordIndex === -1
+                                                        ? "text-[var(--text-secondary)] text-lg"
+                                                        : `text-[var(--text-secondary)] font-medium ${distance > 2 ? "opacity-20 text-sm" : "opacity-60 text-lg"} blur-[0.5px]`
+                                                    }`}
                                             >
                                                 {item.word}
                                             </span>
                                         );
                                     })}
                                 </div>
-                                
                             </div>
-                            
+
                             <div className="flex items-center justify-end shrink-0 w-full mt-4">
                                 <Button size="sm" onClick={playAnimationSync} disabled={isPlaying} className="rounded-full shadow-lg shrink-0">
-                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2"/> : <Play fill="currentColor" size={14} className="mr-2"/>}
+                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2" /> : <Play fill="currentColor" size={14} className="mr-2" />}
                                     {isPlaying ? "Playing..." : "Play Sync"}
                                 </Button>
                             </div>
@@ -7853,65 +7743,56 @@ export function Translate() {
 --------------------------------------------------------------------------------
 FILE: frontend\t81-frontend\src\pages\Uploads.jsx
 --------------------------------------------------------------------------------
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "../components/common/Card";
 import { Button } from "../components/common/Button";
-import { UploadCloud, FileText, Eye, Languages, Play, Trash2 } from "lucide-react";
+import { UploadCloud, FileText, Eye, Play, Trash2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useNavigate } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { api } from "../services/api";
 
 export function Uploads() {
     useDocumentTitle("Uploads");
-    const { isLoggedIn, jwt } = useAuth();
+    const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
 
     const [viewFileModal, setViewFileModal] = useState(null);
     const [uploadList, setUploadList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const toastRef = useRef(addToast);
 
     useEffect(() => {
         if (!isLoggedIn) return;
         const fetchUploads = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/uploads`, {
-                    headers: { "Authorization": `Bearer ${jwt}` }
-                });
-                if (!response.ok) throw new Error("Failed to fetch uploads");
-
-                const data = await response.json();
-                const formattedData = data.map(item => ({
+                const data = await api.get("/uploads");
+                const formattedData = data.map((item) => ({
                     ...item,
-                    date: item.date ? new Date(item.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown Date'
+                    date: item.date
+                        ? new Date(item.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+                        : "Unknown Date",
                 }));
                 setUploadList(formattedData);
             } catch (error) {
-                console.error(error);
-                addToast("Failed to load uploads", "error");
+                toastRef.current({ title: "Failed to load uploads", description: error.message, type: "error" });
             } finally {
                 setIsLoading(false);
             }
         };
         fetchUploads();
-    }, [isLoggedIn, jwt, addToast]);
+    }, [isLoggedIn]);
 
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/uploads/${id}`, {
-                method: "DELETE",
-                headers: {
-                    "Authorization": `Bearer ${jwt}`
-                }
-            });
-            if (!response.ok) throw new Error("Failed to delete upload item");
-            setUploadList(uploadList.filter(item => item.id !== id));
-            addToast("Upload deleted", "success");
+            await api.delete(`/uploads/${id}`);
+            setUploadList((prev) => prev.filter((item) => item.id !== id));
+            addToast({ title: "Upload deleted", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast("Failed to delete upload", "error");
+            addToast({ title: "Failed to delete upload", description: error.message, type: "error" });
         }
     };
 
@@ -7929,8 +7810,8 @@ export function Uploads() {
                             {uploadList.length} / 5 Free Uploads
                         </div>
                         <div className="w-32 h-2 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-1 overflow-hidden">
-                            <div 
-                                className={`h-full rounded-full transition-all duration-500 ${uploadList.length >= 5 ? 'bg-red-500' : 'bg-[var(--primary)]'}`} 
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${uploadList.length >= 5 ? "bg-red-500" : "bg-[var(--primary)]"}`}
                                 style={{ width: `${Math.min((uploadList.length / 5) * 100, 100)}%` }}
                             ></div>
                         </div>
@@ -7946,46 +7827,51 @@ export function Uploads() {
                     <h3 className="text-2xl font-bold">Login to access your uploads</h3>
                     <p className="text-[var(--text-secondary)] max-w-md mx-auto">Upload documents, manage your 5 free files, and translate them to ASL seamlessly across devices.</p>
                     <div className="flex justify-center gap-4">
-                        <Button onClick={() => navigate('/login')}>Log In / Sign Up</Button>
+                        <Button onClick={() => navigate("/login")}>Log In / Sign Up</Button>
                     </div>
                 </Card>
             ) : (
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                    {uploadList.map((item) => (
-                        <Card key={item.id} className="flex flex-col overflow-hidden hover:border-[var(--primary)] transition-colors group">
-                            <div className="flex-1 p-5 space-y-3 cursor-pointer">
-                                <div className="flex items-start justify-between">
-                                    <div className="p-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg text-zinc-600 dark:text-zinc-300 group-hover:bg-orange-500/10 group-hover:text-[var(--primary)] transition-colors">
-                                        <FileText size={24} />
+                    {isLoading ? (
+                        <p className="col-span-3 text-center text-[var(--text-secondary)] py-8">Loading...</p>
+                    ) : uploadList.length === 0 ? (
+                        <p className="col-span-3 text-center text-[var(--text-secondary)] py-8">No uploads yet.</p>
+                    ) : (
+                        uploadList.map((item) => (
+                            <Card key={item.id} className="flex flex-col overflow-hidden hover:border-[var(--primary)] transition-colors group">
+                                <div className="flex-1 p-5 space-y-3 cursor-pointer">
+                                    <div className="flex items-start justify-between">
+                                        <div className="p-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg text-zinc-600 dark:text-zinc-300 group-hover:bg-orange-500/10 group-hover:text-[var(--primary)] transition-colors">
+                                            <FileText size={24} />
+                                        </div>
+                                        <span className="text-xs font-medium text-[var(--text-secondary)]">{item.date}</span>
                                     </div>
-                                    <span className="text-xs font-medium text-[var(--text-secondary)]">{item.date}</span>
+                                    <div className="pt-2">
+                                        <h4 className="font-semibold text-lg text-[var(--text-primary)] group-hover:text-[var(--primary)] transition-colors">{item.name}</h4>
+                                        <p className="text-sm text-[var(--text-secondary)] line-clamp-2 mt-1">{item.description}</p>
+                                    </div>
                                 </div>
-                                <div className="pt-2">
-                                    <h4 className="font-semibold text-lg text-[var(--text-primary)] group-hover:text-[var(--primary)] transition-colors">{item.name}</h4>
-                                    <p className="text-sm text-[var(--text-secondary)] line-clamp-2 mt-1">{item.description}</p>
-                                </div>
-                            </div>
 
-                            <div className="grid grid-cols-3 border-t border-[var(--border-color)] bg-[var(--bg-background)]/50 divide-x divide-[var(--border-color)]">
-                                <button onClick={() => setViewFileModal({ id: item.id, name: item.name, content: item.description })} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#3b82f6] text-[var(--text-secondary)] transition-colors" title="View File">
-                                    <Eye size={16} />
-                                    <span className="text-[10px] uppercase font-bold tracking-wider">View</span>
-                                </button>
-                                <button onClick={() => navigate('/translate')} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#10b981] text-[var(--text-secondary)] transition-colors" title="Animate File">
-                                    <Play size={16} />
-                                    <span className="text-[10px] uppercase font-bold tracking-wider">Animate</span>
-                                </button>
-                                <button onClick={(e) => handleDelete(e, item.id)} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-red-500 text-[var(--text-secondary)] transition-colors" title="Delete File">
-                                    <Trash2 size={16} />
-                                    <span className="text-[10px] uppercase font-bold tracking-wider">Delete</span>
-                                </button>
-                            </div>
-                        </Card>
-                    ))}
+                                <div className="grid grid-cols-3 border-t border-[var(--border-color)] bg-[var(--bg-background)]/50 divide-x divide-[var(--border-color)]">
+                                    <button onClick={() => setViewFileModal({ id: item.id, name: item.name, content: item.description })} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#3b82f6] text-[var(--text-secondary)] transition-colors" title="View File">
+                                        <Eye size={16} />
+                                        <span className="text-[10px] uppercase font-bold tracking-wider">View</span>
+                                    </button>
+                                    <button onClick={() => navigate("/translate")} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#10b981] text-[var(--text-secondary)] transition-colors" title="Animate File">
+                                        <Play size={16} />
+                                        <span className="text-[10px] uppercase font-bold tracking-wider">Animate</span>
+                                    </button>
+                                    <button onClick={(e) => handleDelete(e, item.id)} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-red-500 text-[var(--text-secondary)] transition-colors" title="Delete File">
+                                        <Trash2 size={16} />
+                                        <span className="text-[10px] uppercase font-bold tracking-wider">Delete</span>
+                                    </button>
+                                </div>
+                            </Card>
+                        ))
+                    )}
                 </div>
             )}
 
-            {}
             {viewFileModal && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
                     <Card className="w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
@@ -8010,6 +7896,73 @@ export function Uploads() {
         </div>
     );
 }
+
+
+--------------------------------------------------------------------------------
+FILE: frontend\t81-frontend\src\services\api.js
+--------------------------------------------------------------------------------
+const BASE_URL = import.meta.env.VITE_API_URL;
+
+const getToken = () => localStorage.getItem("sf_jwt");
+
+const buildHeaders = (extra = {}) => {
+    const token = getToken();
+    const headers = { ...extra };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    return headers;
+};
+
+const parseError = async (response) => {
+    if (response.status === 429) {
+        return new Error("Too many requests. Please wait a moment and try again.");
+    }
+    if (response.status === 401) {
+        return new Error("SESSION_EXPIRED");
+    }
+    try {
+        const body = await response.json();
+        if (Array.isArray(body.detail)) return new Error(body.detail[0].msg);
+        if (typeof body.detail === "string") return new Error(body.detail);
+    } catch (_) {
+        return new Error(`Request failed with status ${response.status}`);
+    }
+    return new Error(`Request failed with status ${response.status}`);
+};
+
+const request = async (method, path, options = {}) => {
+    const { body, formBody, isFormData } = options;
+
+    const headers = buildHeaders(
+        isFormData
+            ? {}
+            : formBody
+                ? { "Content-Type": "application/x-www-form-urlencoded" }
+                : { "Content-Type": "application/json" }
+    );
+
+    const fetchOptions = { method, headers };
+
+    if (body) fetchOptions.body = JSON.stringify(body);
+    if (formBody) fetchOptions.body = formBody;
+    if (isFormData) fetchOptions.body = isFormData;
+
+    const response = await fetch(`${BASE_URL}${path}`, fetchOptions);
+
+    if (!response.ok) {
+        throw await parseError(response);
+    }
+
+    return response.json();
+};
+
+export const api = {
+    get: (path) => request("GET", path),
+    post: (path, body) => request("POST", path, { body }),
+    postForm: (path, formBody) => request("POST", path, { formBody }),
+    postMultipart: (path, formData) => request("POST", path, { isFormData: formData }),
+    put: (path, body) => request("PUT", path, { body }),
+    delete: (path) => request("DELETE", path),
+};
 
 
 --------------------------------------------------------------------------------

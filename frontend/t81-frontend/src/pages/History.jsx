@@ -5,57 +5,48 @@ import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useToast } from "../context/ToastContext";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { api } from "../services/api";
 
 export function History() {
     useDocumentTitle("History");
-    const { isLoggedIn, jwt } = useAuth();
+    const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
 
     const [historyList, setHistoryList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const toastRef = useRef(addToast);
 
     useEffect(() => {
         if (!isLoggedIn) return;
         const fetchHistory = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/history`, {
-                    headers: { "Authorization": `Bearer ${jwt}` }
-                });
-                if (!response.ok) throw new Error("Failed to fetch history");
-
-                const data = await response.json();
-                const formattedData = data.map(item => ({
+                const data = await api.get("/history");
+                const formattedData = data.map((item) => ({
                     ...item,
-                    date: item.date ? new Date(item.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown Date'
+                    date: item.date
+                        ? new Date(item.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+                        : "Unknown Date",
                 }));
                 setHistoryList(formattedData);
             } catch (error) {
-                console.error(error);
-                addToast("Failed to load history", "error");
+                toastRef.current({ title: "Failed to load history", description: error.message, type: "error" });
             } finally {
                 setIsLoading(false);
             }
         };
         fetchHistory();
-    }, [isLoggedIn, jwt, addToast]);
+    }, [isLoggedIn]);
 
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/history/${id}`, {
-                method: "DELETE",
-                headers: {
-                    "Authorization": `Bearer ${jwt}`
-                }
-            });
-            if (!response.ok) throw new Error("Failed to delete history item");
-            setHistoryList(historyList.filter(item => item.id !== id));
-            addToast("History item deleted", "success");
+            await api.delete(`/history/${id}`);
+            setHistoryList((prev) => prev.filter((item) => item.id !== id));
+            addToast({ title: "History item deleted", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast("Failed to delete history item", "error");
+            addToast({ title: "Failed to delete history item", description: error.message, type: "error" });
         }
     };
 
@@ -74,7 +65,7 @@ export function History() {
                     <h3 className="text-2xl font-bold">Login to view history</h3>
                     <p className="text-[var(--text-secondary)] max-w-md mx-auto">Securely access all your past grammar translations and replay 3D animations anytime.</p>
                     <div className="flex justify-center gap-4">
-                        <Button onClick={() => navigate('/login')}>Log In / Sign Up</Button>
+                        <Button onClick={() => navigate("/login")}>Log In / Sign Up</Button>
                     </div>
                 </Card>
             ) : (
@@ -90,42 +81,52 @@ export function History() {
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-[var(--border-color)]">
-                                {historyList.map((item) => (
-                                    <tr key={item.id} className="hover:bg-[var(--bg-background)]/50 transition-colors group">
-                                        <td className="p-4">
-                                            <div className="flex items-start gap-3">
-                                                <MessageSquare size={16} className="mt-1 text-[var(--text-secondary)] opacity-50 flex-shrink-0" />
-                                                <p className="text-[var(--text-primary)] font-medium line-clamp-2">{item.text}</p>
-                                            </div>
-                                        </td>
-                                        <td className="p-4">
-                                            <code className="text-[var(--primary)] bg-[var(--primary)]/10 px-2 py-1 rounded text-sm font-bold tracking-wide">{item.asl}</code>
-                                        </td>
-                                        <td className="p-4 text-[var(--text-secondary)] text-sm whitespace-nowrap">{item.date}</td>
-                                        <td className="p-4 text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => navigate('/translate')}
-                                                    className="group-hover:border-[var(--primary)] group-hover:text-[var(--primary)] transition-colors"
-                                                >
-                                                    <Play size={14} className="mr-2" />
-                                                    See Animation
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={(e) => handleDelete(e, item.id)}
-                                                    className="text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors px-2"
-                                                    title="Delete History"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </Button>
-                                            </div>
-                                        </td>
+                                {isLoading ? (
+                                    <tr>
+                                        <td colSpan={4} className="p-8 text-center text-[var(--text-secondary)]">Loading...</td>
                                     </tr>
-                                ))}
+                                ) : historyList.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={4} className="p-8 text-center text-[var(--text-secondary)]">No translation history yet.</td>
+                                    </tr>
+                                ) : (
+                                    historyList.map((item) => (
+                                        <tr key={item.id} className="hover:bg-[var(--bg-background)]/50 transition-colors group">
+                                            <td className="p-4">
+                                                <div className="flex items-start gap-3">
+                                                    <MessageSquare size={16} className="mt-1 text-[var(--text-secondary)] opacity-50 flex-shrink-0" />
+                                                    <p className="text-[var(--text-primary)] font-medium line-clamp-2">{item.text}</p>
+                                                </div>
+                                            </td>
+                                            <td className="p-4">
+                                                <code className="text-[var(--primary)] bg-[var(--primary)]/10 px-2 py-1 rounded text-sm font-bold tracking-wide">{item.asl}</code>
+                                            </td>
+                                            <td className="p-4 text-[var(--text-secondary)] text-sm whitespace-nowrap">{item.date}</td>
+                                            <td className="p-4 text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => navigate("/translate")}
+                                                        className="group-hover:border-[var(--primary)] group-hover:text-[var(--primary)] transition-colors"
+                                                    >
+                                                        <Play size={14} className="mr-2" />
+                                                        See Animation
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={(e) => handleDelete(e, item.id)}
+                                                        className="text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors px-2"
+                                                        title="Delete History"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </Button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
                             </tbody>
                         </table>
                     </div>

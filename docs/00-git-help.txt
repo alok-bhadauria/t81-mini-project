@@ -111,7 +111,7 @@ git push origin main
 
 07. Running the servers (backend and frontend):
 
-• For backend, go to t81-backend folder and run the following command:
+• For backend, go to backend folder and run the following command:
 .\t81-backend\Scripts\activate; uvicorn app.main:app --reload
 
 • For frontend, go to t81-frontend folder and run the following command:

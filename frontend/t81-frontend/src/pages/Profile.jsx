@@ -1,16 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "../components/common/Card";
 import { Button } from "../components/common/Button";
-import { User, Mail, Calendar, LogOut, Edit2, Save, X, Phone, Instagram, FileText, Loader2, Twitter, Linkedin, Github, Link as LinkIcon, Camera, Trash2, Hash, Check, Eye, EyeOff } from "lucide-react";
+import { User, Mail, Calendar, LogOut, Edit2, Save, X, Phone, FileText, Loader2, Camera, Trash2, Hash, Check, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import zxcvbn from "zxcvbn";
 import { useToast } from "../context/ToastContext";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { api } from "../services/api";
 
 export function Profile() {
     useDocumentTitle("Profile");
-    const { isLoggedIn, user, logout, jwt, updateUserState } = useAuth();
+    const { isLoggedIn, user, logout, updateUserState } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -19,27 +20,28 @@ export function Profile() {
     const [isSaving, setIsSaving] = useState(false);
     const [isChangingPassword, setIsChangingPassword] = useState(false);
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-    
+
     const [stats, setStats] = useState({ translations: 0, saved_items: 0, plan: "free", isLoading: true });
     const [editForm, setEditForm] = useState({
         full_name: user?.full_name || "",
         username: user?.username || "",
         bio: user?.bio || "",
-        phone_number: user?.phone_number || ""
+        phone_number: user?.phone_number || "",
     });
 
     const [usernameAvailable, setUsernameAvailable] = useState(null);
     const [isCheckingUsername, setIsCheckingUsername] = useState(false);
 
-    const [showCurrentPassword, setShowCurrentPassword] = useState(false);
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     const [passwordForm, setPasswordForm] = useState({
         current_password: "",
         new_password: "",
-        confirm_password: ""
+        confirm_password: "",
     });
+
+    const addToastRef = useRef(addToast);
 
     useEffect(() => {
         if (user) {
@@ -47,29 +49,23 @@ export function Profile() {
                 full_name: user.full_name || "",
                 username: user.username || "",
                 bio: user.bio || "",
-                phone_number: user.phone_number || ""
+                phone_number: user.phone_number || "",
             });
         }
     }, [user]);
 
     useEffect(() => {
-        if (!isLoggedIn || !jwt) return;
+        if (!isLoggedIn) return;
         const fetchStats = async () => {
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/stats`, {
-                    headers: { "Authorization": `Bearer ${jwt}` }
-                });
-                if (response.ok) {
-                    const data = await response.json();
-                    setStats({ ...data, isLoading: false });
-                }
-            } catch (error) {
-                console.error("Failed to load stats", error);
-                setStats(prev => ({ ...prev, isLoading: false }));
+                const data = await api.get("/auth/me/stats");
+                setStats({ ...data, isLoading: false });
+            } catch (_) {
+                setStats((prev) => ({ ...prev, isLoading: false }));
             }
         };
         fetchStats();
-    }, [isLoggedIn, jwt]);
+    }, [isLoggedIn]);
 
     useEffect(() => {
         if (!isEditing) return;
@@ -89,13 +85,10 @@ export function Profile() {
         const checkAvailability = async () => {
             setIsCheckingUsername(true);
             try {
-                const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/check-username?username=${editForm.username}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setUsernameAvailable(data.available);
-                }
-            } catch (error) {
-                console.error("Username check failed", error);
+                const data = await api.get(`/auth/check-username?username=${editForm.username}`);
+                setUsernameAvailable(data.available);
+            } catch (_) {
+                setUsernameAvailable(null);
             } finally {
                 setIsCheckingUsername(false);
             }
@@ -110,7 +103,7 @@ export function Profile() {
             full_name: user?.full_name || "",
             username: user?.username || "",
             bio: user?.bio || "",
-            phone_number: user?.phone_number || ""
+            phone_number: user?.phone_number || "",
         });
         setIsEditing(true);
     };
@@ -124,31 +117,11 @@ export function Profile() {
         formData.append("file", file);
 
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me/avatar`, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: formData
-            });
-
-            if (!response.ok) {
-                let errorMsg = "Failed to upload avatar";
-                try {
-                    const errData = await response.json();
-                    if (errData.detail) errorMsg = typeof errData.detail === 'string' ? errData.detail : errData.detail[0].msg;
-                } catch (e) {
-                    errorMsg = "Network error. The file might be too large.";
-                }
-                throw new Error(errorMsg);
-            }
-
-            const updatedData = await response.json();
+            const updatedData = await api.postMultipart("/auth/me/avatar", formData);
             updateUserState(updatedData);
-            addToast("Profile picture updated", "success");
+            addToastRef.current({ title: "Profile picture updated", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast(error.message || "Failed to upload profile picture", "error");
+            addToastRef.current({ title: error.message || "Failed to upload profile picture", type: "error" });
         } finally {
             setIsUploadingAvatar(false);
             e.target.value = null;
@@ -158,23 +131,11 @@ export function Profile() {
     const handleRemoveAvatar = async () => {
         setIsUploadingAvatar(true);
         try {
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify({ profile_picture_url: "" })
-            });
-
-            if (!response.ok) throw new Error("Failed to remove avatar");
-
-            const updatedData = await response.json();
+            const updatedData = await api.put("/auth/me", { profile_picture_url: "" });
             updateUserState(updatedData);
-            addToast("Profile picture removed", "success");
+            addToastRef.current({ title: "Profile picture removed", type: "success" });
         } catch (error) {
-            console.error(error);
-            addToast("Failed to remove profile picture", "error");
+            addToastRef.current({ title: error.message || "Failed to remove profile picture", type: "error" });
         } finally {
             setIsUploadingAvatar(false);
         }
@@ -183,7 +144,6 @@ export function Profile() {
     const handleSave = async () => {
         setIsSaving(true);
         try {
-
             if (passwordForm.current_password || passwordForm.new_password) {
                 if (!passwordForm.current_password || !passwordForm.new_password || !passwordForm.confirm_password) {
                     throw new Error("Please fill out all password fields, or leave them entirely blank to keep your current password.");
@@ -193,56 +153,22 @@ export function Profile() {
                 }
 
                 setIsChangingPassword(true);
-                const pwdResponse = await fetch(`${import.meta.env.VITE_API_URL}/auth/password`, {
-                    method: "PUT",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${jwt}`
-                    },
-                    body: JSON.stringify({
-                        current_password: passwordForm.current_password,
-                        new_password: passwordForm.new_password
-                    })
+                await api.put("/auth/password", {
+                    current_password: passwordForm.current_password,
+                    new_password: passwordForm.new_password,
                 });
-
-                if (!pwdResponse.ok) {
-                    const errData = await pwdResponse.json();
-                    let errMsg = "Failed to update password";
-                    if (Array.isArray(errData.detail)) errMsg = errData.detail[0].msg;
-                    else if (typeof errData.detail === 'string') errMsg = errData.detail;
-                    throw new Error(errMsg);
-                }
             }
 
-            const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/me`, {
-                method: "PUT",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${jwt}`
-                },
-                body: JSON.stringify(editForm)
-            });
-
-            if (!response.ok) {
-                const errData = await response.json();
-                let errMsg = "Failed to update profile";
-                if (Array.isArray(errData.detail)) errMsg = errData.detail[0].msg;
-                else if (typeof errData.detail === 'string') errMsg = errData.detail;
-                throw new Error(errMsg);
-            }
-
-            const updatedData = await response.json();
+            const updatedData = await api.put("/auth/me", editForm);
             updateUserState(updatedData);
 
             setPasswordForm({ current_password: "", new_password: "", confirm_password: "" });
             setIsEditing(false);
-            navigate('/profile', { replace: true });
+            navigate("/profile", { replace: true });
 
-            addToast("Profile updated successfully", "success");
+            addToast({ title: "Profile updated successfully", type: "success" });
         } catch (error) {
-            console.error(error);
-            const errBody = error.message === "Failed to fetch" ? "Network Error" : error.message;
-            addToast(errBody || "Failed to save profile changes", "error");
+            addToast({ title: error.message || "Failed to save profile changes", type: "error" });
         } finally {
             setIsSaving(false);
             setIsChangingPassword(false);
@@ -256,7 +182,7 @@ export function Profile() {
                     <User size={64} className="mx-auto text-zinc-400" />
                     <h2 className="text-2xl font-bold">Unauthenticated</h2>
                     <p className="text-[var(--text-secondary)]">Please log in to view your profile.</p>
-                    <Button onClick={() => navigate('/login')}>Go to Login</Button>
+                    <Button onClick={() => navigate("/login")}>Go to Login</Button>
                 </Card>
             </div>
         );
@@ -337,8 +263,8 @@ export function Profile() {
                                     </div>
                                 </div>
                                 <div className="flex gap-4 justify-center md:justify-start pt-4 border-t border-[var(--border-color)]">
-                                    <Button variant="outline" onClick={() => navigate('/settings')}>Preferences</Button>
-                                    <Button variant="ghost" className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => { logout(); navigate('/'); }}>
+                                    <Button variant="outline" onClick={() => navigate("/settings")}>Preferences</Button>
+                                    <Button variant="ghost" className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => { logout(); navigate("/"); }}>
                                         <LogOut size={16} className="mr-2" /> Logout
                                     </Button>
                                 </div>
@@ -366,9 +292,7 @@ export function Profile() {
                                             ) : usernameAvailable === false ? (
                                                 <span className="flex items-center gap-1 text-red-500">
                                                     <X size={12} />
-                                                    {(!editForm.username || editForm.username.length < 5 || editForm.username.length > 20)
-                                                        ? '5-20 Chars'
-                                                        : 'Unavailable'}
+                                                    {(!editForm.username || editForm.username.length < 5 || editForm.username.length > 20) ? "5-20 Chars" : "Unavailable"}
                                                 </span>
                                             ) : null}
                                         </label>
@@ -376,7 +300,7 @@ export function Profile() {
                                             type="text"
                                             maxLength={20}
                                             minLength={5}
-                                            className={`w-full bg-[var(--bg-surface)] border ${usernameAvailable === false ? 'border-red-500 focus:ring-red-500' : 'border-[var(--border-color)] focus:ring-[var(--primary)]'} rounded-lg px-4 py-2 focus:ring-2 outline-none transition-colors`}
+                                            className={`w-full bg-[var(--bg-surface)] border ${usernameAvailable === false ? "border-red-500 focus:ring-red-500" : "border-[var(--border-color)] focus:ring-[var(--primary)]"} rounded-lg px-4 py-2 focus:ring-2 outline-none transition-colors`}
                                             value={editForm.username}
                                             onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
                                         />
@@ -399,9 +323,6 @@ export function Profile() {
                                             value={editForm.phone_number}
                                             onChange={(e) => setEditForm({ ...editForm, phone_number: e.target.value })}
                                         />
-                                    </div>
-                                    <div className="flex items-center">
-                                        { }
                                     </div>
                                 </div>
                                 <div>
@@ -433,9 +354,7 @@ export function Profile() {
                                                         type={showNewPassword ? "text" : "password"}
                                                         className="w-full bg-[var(--bg-background)] border border-[var(--border-color)] rounded-lg px-4 py-2 focus:ring-2 focus:ring-[var(--primary)] outline-none transition-all pr-10"
                                                         value={passwordForm.new_password}
-                                                        onChange={(e) => {
-                                                            setPasswordForm({ ...passwordForm, new_password: e.target.value });
-                                                        }}
+                                                        onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
                                                     />
                                                     <button
                                                         type="button"
@@ -445,30 +364,28 @@ export function Profile() {
                                                         {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                                     </button>
                                                 </div>
-
-                                                { }
                                                 {passwordForm.new_password && (
                                                     <div className="mt-2 text-xs">
                                                         <div className="flex justify-between mb-1">
                                                             <span className="text-zinc-500">Security Requirement:</span>
-                                                            <span className={zxcvbn(passwordForm.new_password).score > 2 ? 'text-green-500' : 'text-orange-500'}>
-                                                                {['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'][zxcvbn(passwordForm.new_password).score]}
+                                                            <span className={zxcvbn(passwordForm.new_password).score > 2 ? "text-green-500" : "text-orange-500"}>
+                                                                {["Very Weak", "Weak", "Fair", "Good", "Strong"][zxcvbn(passwordForm.new_password).score]}
                                                             </span>
                                                         </div>
                                                         <ul className="grid grid-cols-2 gap-x-2 gap-y-1 mt-1 text-zinc-500 uppercase font-semibold text-[10px]">
-                                                            <li className={`flex items-center gap-1 ${passwordForm.new_password.length >= 8 ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${passwordForm.new_password.length >= 8 ? "text-green-500" : ""}`}>
                                                                 {passwordForm.new_password.length >= 8 ? <Check size={10} /> : <X size={10} />} 8+ Chars
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[A-Z]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[A-Z]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[A-Z]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} UPPERCASE
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[a-z]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[a-z]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[a-z]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} LOWERCASE
                                                             </li>
-                                                            <li className={`flex items-center gap-1 ${/[0-9]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 ${/[0-9]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[0-9]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} NUMBER
                                                             </li>
-                                                            <li className={`flex items-center gap-1 col-span-2 ${/[@$!%*?&]/.test(passwordForm.new_password) ? 'text-green-500' : ''}`}>
+                                                            <li className={`flex items-center gap-1 col-span-2 ${/[@$!%*?&]/.test(passwordForm.new_password) ? "text-green-500" : ""}`}>
                                                                 {/[@$!%*?&]/.test(passwordForm.new_password) ? <Check size={10} /> : <X size={10} />} SPECIAL CHAR (@$!%*?&)
                                                             </li>
                                                         </ul>
@@ -506,7 +423,6 @@ export function Profile() {
                                 </div>
                             </div>
                         )}
-
                     </div>
                 </div>
             </Card>

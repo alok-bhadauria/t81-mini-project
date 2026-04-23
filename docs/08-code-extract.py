@@ -1,7 +1,6 @@
 import os
 
 def create_code_extracts():
-    # Set directories relative to the location of this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, '..'))
     
@@ -11,7 +10,6 @@ def create_code_extracts():
     backend_output = os.path.join(script_dir, 'backend-code.txt')
     frontend_output = os.path.join(script_dir, 'frontend-code.txt')
     
-    # Common directories and file extensions to ignore
     ignore_dirs = {
         'venv', '.venv', 'env', 'node_modules', '__pycache__', 
         '.git', 'dist', 'build', '.pytest_cache', 't81-backend', 'public', 'assets', '.next'
@@ -32,24 +30,20 @@ def create_code_extracts():
             outfile.write(f"{header}\n\n")
             
             for root, dirs, files in os.walk(base_directory):
-                # Filter out ignored directories structurally
                 dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                 
                 for file in files:
-                    # Ignore specified extensions and standalone dotfiles 
                     _, ext = os.path.splitext(file)
                     if ext.lower() in ignore_extensions or file.startswith('.'):
                         continue
                         
                     file_path = os.path.join(root, file)
-                    # Use relative path for cleaner output block headers
                     rel_path = os.path.relpath(file_path, project_root)
                     
                     try:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             content = f.read()
                             
-                        # Format the output block
                         outfile.write("-" * 80 + "\n")
                         outfile.write(f"FILE: {rel_path}\n")
                         outfile.write("-" * 80 + "\n")
@@ -60,14 +54,12 @@ def create_code_extracts():
                         
         print(f"Successfully generated: {output_file}")
 
-    # Run for backend
     collect_code(
         base_directory=backend_dir,
         header="SIGNFUSION BACKEND ARCHITECTURE AND CODE",
         output_file=backend_output
     )
     
-    # Run for frontend
     collect_code(
         base_directory=frontend_dir,
         header="SIGNFUSION FRONTEND ARCHITECTURE AND CODE",

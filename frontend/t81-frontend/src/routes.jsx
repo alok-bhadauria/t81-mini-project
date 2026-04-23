@@ -8,6 +8,7 @@ import { History } from "./pages/History";
 import { Support } from "./pages/Support";
 import { Profile } from "./pages/Profile";
 import { Login } from "./pages/Login";
+import { ProtectedRoute } from "./components/common/ProtectedRoute";
 
 const router = createBrowserRouter([
     {
@@ -15,12 +16,27 @@ const router = createBrowserRouter([
         element: <MainLayout />,
         children: [
             { index: true, element: <Landing /> },
-            { path: "translate", element: <Translate /> },
-            { path: "settings", element: <Settings /> },
-            { path: "uploads", element: <Uploads /> },
-            { path: "history", element: <History /> },
+            {
+                path: "translate",
+                element: <ProtectedRoute><Translate /></ProtectedRoute>,
+            },
+            {
+                path: "settings",
+                element: <ProtectedRoute><Settings /></ProtectedRoute>,
+            },
+            {
+                path: "uploads",
+                element: <ProtectedRoute><Uploads /></ProtectedRoute>,
+            },
+            {
+                path: "history",
+                element: <ProtectedRoute><History /></ProtectedRoute>,
+            },
             { path: "support", element: <Support /> },
-            { path: ":userId", element: <Profile /> },
+            {
+                path: ":userId",
+                element: <ProtectedRoute><Profile /></ProtectedRoute>,
+            },
         ],
     },
     {
@@ -30,7 +46,7 @@ const router = createBrowserRouter([
     {
         path: "*",
         element: <Navigate to="/" replace />,
-    }
+    },
 ]);
 
 export function AppRouter() {
