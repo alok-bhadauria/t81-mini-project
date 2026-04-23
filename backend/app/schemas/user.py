@@ -1,8 +1,9 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.base import SanitizedBaseModel
 from datetime import datetime
 import re
 
-class UserCreateRequest(BaseModel):
+class UserCreateRequest(SanitizedBaseModel):
     email: EmailStr
     password: str = Field(
         ..., 
@@ -36,14 +37,14 @@ class UserResponse(BaseModel):
     plan: str
     created_at: datetime
 
-class UserUpdateRequest(BaseModel):
-    full_name: str | None = None
-    username: str | None = None
-    bio: str | None = None
-    phone_number: str | None = None
+class UserUpdateRequest(SanitizedBaseModel):
+    full_name: str | None = Field(None, max_length=100)
+    username: str | None = Field(None, pattern=r"^[a-zA-Z0-9_.-]{3,30}$", description="Alphanumeric with dot, underscore, dash")
+    bio: str | None = Field(None, max_length=500)
+    phone_number: str | None = Field(None, pattern=r"^\+?[1-9]\d{1,14}$", description="E.164 standard phone number")
     profile_picture_url: str | None = None
 
-class PasswordUpdateRequest(BaseModel):
+class PasswordUpdateRequest(SanitizedBaseModel):
     current_password: str
     new_password: str = Field(
         ..., 

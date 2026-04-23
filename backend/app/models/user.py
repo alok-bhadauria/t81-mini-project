@@ -24,6 +24,7 @@ class UserDBModel(BaseModel):
     phone_number: Optional[str] = None
     profile_picture_url: Optional[str] = None
     plan: str = Field(default="free")
+    role: str = Field(default="user")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
