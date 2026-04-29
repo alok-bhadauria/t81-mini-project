@@ -18,7 +18,7 @@ SignFusion bridges this gap by providing a real-time, browser-based pipeline tha
 
 **Frontend**
 - **React.js & Vite** for high-performance UI rendering
-- **Tailwind CSS** for clean, responsive styling
+- **Tailwind CSS** for clean, responsive, structured styling
 - **Firebase Auth** for user session management
 - **React-Three-Fiber / Three.js** to render and drive the 3D GLB ASL animations
 
