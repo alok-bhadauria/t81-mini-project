@@ -26,9 +26,11 @@ def _load_json(filename: str) -> dict:
         return json.load(f)
 
 
-def _build_prompt(clean_text: str, gesture_map: dict, sentiment_map: dict) -> str:
+_EMOTION_LIST = "HAPPY, SAD, NEUTRAL"
+
+
+def _build_prompt(clean_text: str, gesture_map: dict) -> str:
     gesture_vocab = ", ".join(sorted(k for k in gesture_map.keys() if len(k) > 1))
-    emotion_list = ", ".join(sentiment_map.keys())
     return (
         "You are a strict ASL grammar engine. Return ONLY a single valid JSON object. No markdown. No explanation.\n\n"
         "TASK 1 — ASL GRAMMAR CONVERSION:\n"
@@ -41,7 +43,7 @@ def _build_prompt(clean_text: str, gesture_map: dict, sentiment_map: dict) -> st
         "- Unknown or invented words: preserve as uppercase without substitution.\n"
         f"- When semantically equivalent, prefer words from this gesture vocabulary: [{gesture_vocab}]\n\n"
         "TASK 2 — EMOTION CLASSIFICATION:\n"
-        f"Classify the overall emotion of the input. Choose exactly one from: {emotion_list}.\n\n"
+        f"Classify the overall emotion of the input. Choose exactly one from: {_EMOTION_LIST}.\n\n"
         "STRICT OUTPUT RULES:\n"
         "- tokens must contain exactly the same words as asl_text, split by spaces. No extras. No omissions.\n"
         "- asl_text is the space-joined version of tokens.\n"
@@ -90,7 +92,6 @@ class GeminiTranslationService(BaseAITranslationService):
         self._initialized = True
         self._cache = _LRUCache(_CACHE_MAX_SIZE)
         self._gesture_map: dict = {}
-        self._sentiment_map: dict = {}
         self._client = None
         self._success_count = 0
         self._failure_count = 0
@@ -101,11 +102,10 @@ class GeminiTranslationService(BaseAITranslationService):
 
         try:
             self._gesture_map = _load_json("gesture_map.json")
-            self._sentiment_map = _load_json("sentiment_map.json")
             self._client = genai.Client(api_key=settings.gemini_api_key)
             logger.info(
                 f"GeminiTranslationService: Initialized. model={settings.gemini_model} "
-                f"gesture_vocab={len(self._gesture_map)} sentiments={len(self._sentiment_map)}."
+                f"gesture_vocab={len(self._gesture_map)}."
             )
         except Exception:
             logger.exception("GeminiTranslationService: Initialization failed.")
@@ -157,7 +157,7 @@ class GeminiTranslationService(BaseAITranslationService):
         return response.text
 
     async def _invoke(self, clean_text: str) -> AITranslationResult:
-        prompt = _build_prompt(clean_text, self._gesture_map, self._sentiment_map)
+        prompt = _build_prompt(clean_text, self._gesture_map)
         raw = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(None, self._call_gemini_sync, prompt),
             timeout=_GEMINI_TIMEOUT_SECONDS,

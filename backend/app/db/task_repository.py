@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime
+from typing import List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.models.task import TaskDBModel
 
@@ -20,9 +21,7 @@ class TaskRepository:
         processed_text: str,
         emotion_id: str,
         asl_grammar_output: str,
-        sentiment_animation_id: str,
-        gesture_animation_ids: list[str],
-        animation_sequence: list[dict],
+        animation_stream: List[dict],
         file_metadata: dict = None,
     ) -> TaskDBModel:
         logger.info(f"TaskRepository: Inserting record for user {user_id}.")
@@ -36,9 +35,7 @@ class TaskRepository:
             processed_text=processed_text,
             emotion_id=emotion_id,
             asl_grammar_output=asl_grammar_output,
-            sentiment_animation_id=sentiment_animation_id,
-            gesture_animation_ids=gesture_animation_ids,
-            animation_sequence=animation_sequence,
+            animation_stream=animation_stream,
             file_metadata=file_metadata,
             created_at=datetime.utcnow(),
         )

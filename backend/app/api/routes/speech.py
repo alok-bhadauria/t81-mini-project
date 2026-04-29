@@ -81,9 +81,7 @@ async def websocket_speech_endpoint(
                         "type": "final" if is_final else "partial",
                         "processed_text": result.processed_text,
                         "asl_grammar_output": result.asl_grammar_output,
-                        "sentiment_animation_id": result.sentiment_animation_id,
-                        "gesture_animation_ids": result.gesture_animation_ids,
-                        "animation_sequence": result.animation_sequence,
+                        "animation_stream": [t.dict() for t in result.animation_stream],
                     }
                     await websocket.send_json(response_data)
                 except asyncio.TimeoutError:

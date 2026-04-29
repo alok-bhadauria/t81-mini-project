@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
     from app.services.c_ai_translation_service import AITranslationService
     from app.services.b_gemini_translation_service import GeminiTranslationService
     animation_svc = AnimationService()
-    AITranslationService().load_gesture_vocabulary(animation_svc.get_gesture_map())
+    AITranslationService().load_gesture_vocabulary(animation_svc.get_animation_registry())
     GeminiTranslationService()
 
     yield
@@ -134,7 +134,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins if isinstance(settings.cors_origins, list) else settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-CSRF-Token"],
 )
 
 app.add_middleware(SlowAPIMiddleware)

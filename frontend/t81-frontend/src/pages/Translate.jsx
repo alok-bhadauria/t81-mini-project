@@ -1,32 +1,72 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Card } from "../components/common/Card";
 import { Button } from "../components/common/Button";
-import { Keyboard, Mic, FileText, Send, Loader2, Volume2, User, Play, Square, Settings, Upload, X, Check } from "lucide-react";
+import { Keyboard, Mic, FileText, Send, Loader2, Volume2, Play, Square, Settings, Upload, X, Check } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { useAnimationRegistry, resolveTokenToFile } from "../hooks/useAnimationRegistry";
+import { AvatarRenderer } from "../components/common/AvatarRenderer";
 import { api } from "../services/api";
+
+const ANIMATION_DURATION_MS = 2500;
 
 export function Translate() {
     useDocumentTitle("App");
     const { isLoggedIn } = useAuth();
     const { addToast } = useToast();
+    const { registry } = useAnimationRegistry();
 
     const [activeTab, setActiveTab] = useState("text");
     const [inputText, setInputText] = useState("");
     const [isTranslating, setIsTranslating] = useState(false);
-
     const [outputAsl, setOutputAsl] = useState("");
     const [isListening, setIsListening] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
     const fileInputRef = useRef(null);
-
     const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-    const [animationSequence, setAnimationSequence] = useState([]);
-    const [sentimentId, setSentimentId] = useState("");
+    const [animationStream, setAnimationStream] = useState([]);
+    const [currentIndex, setCurrentIndex] = useState(-1);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [currentWordIndex, setCurrentWordIndex] = useState(-1);
+    const [currentAnimUrl, setCurrentAnimUrl] = useState(null);
+
+    const playSequenceRef = useRef(false);
+
+    const resolveUrl = useCallback(
+        (token) => resolveTokenToFile(registry, token),
+        [registry]
+    );
+
+    const playStream = useCallback(
+        async (stream) => {
+            if (!stream || stream.length === 0) return;
+            playSequenceRef.current = true;
+            setIsPlaying(true);
+
+            for (let i = 0; i < stream.length; i++) {
+                if (!playSequenceRef.current) break;
+                const item = stream[i];
+                const url = resolveUrl(item.token);
+                setCurrentIndex(i);
+                setCurrentAnimUrl(url);
+                await new Promise((r) => setTimeout(r, ANIMATION_DURATION_MS));
+            }
+
+            setCurrentIndex(-1);
+            setCurrentAnimUrl(null);
+            setIsPlaying(false);
+            playSequenceRef.current = false;
+        },
+        [resolveUrl]
+    );
+
+    const stopPlayback = () => {
+        playSequenceRef.current = false;
+        setIsPlaying(false);
+        setCurrentIndex(-1);
+        setCurrentAnimUrl(null);
+    };
 
     const toggleListening = () => {
         if (isListening) {
@@ -44,18 +84,16 @@ export function Translate() {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = "en-US";
-
         recognition.onstart = () => setIsListening(true);
         recognition.onresult = (event) => {
-            let transcriptText = "";
+            let text = "";
             for (let i = 0; i < event.results.length; i++) {
-                transcriptText += event.results[i][0].transcript;
+                text += event.results[i][0].transcript;
             }
-            setInputText(transcriptText);
+            setInputText(text);
         };
         recognition.onerror = () => setIsListening(false);
         recognition.onend = () => setIsListening(false);
-
         recognition.start();
         window.speechRec = recognition;
     };
@@ -63,12 +101,10 @@ export function Translate() {
     const handleFileChange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-
         if (!file.name.endsWith(".txt")) {
-            addToast({ title: "Unsupported File", description: "Only .txt files can be processed. PDF and DOCX support coming soon.", type: "error" });
+            addToast({ title: "Unsupported File", description: "Only .txt files are supported.", type: "error" });
             return;
         }
-
         setSelectedFile(file);
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -82,6 +118,7 @@ export function Translate() {
 
     const handleTextSubmit = async () => {
         if (!inputText.trim()) return;
+        stopPlayback();
         setIsTranslating(true);
 
         const payloadType = activeTab === "document" ? "DOCUMENT" : activeTab === "speech" ? "SPEECH" : "TEXT";
@@ -94,39 +131,15 @@ export function Translate() {
                 ...(filename && { filename }),
             });
 
-            const newSequence = data.animation_sequence || [];
+            const stream = data.animation_stream || [];
             setOutputAsl(data.asl_grammar_output || "");
-            setAnimationSequence(newSequence);
-            setSentimentId(data.sentiment_animation_id || "sa003");
-            setCurrentWordIndex(-1);
-            setIsPlaying(false);
+            setAnimationStream(stream);
 
             addToast({ title: "Translation successful", type: "success" });
 
-            if (newSequence.length > 0) {
-                setTimeout(() => {
-                    setIsPlaying(true);
-                    setCurrentWordIndex(0);
-                    let idx = 0;
-                    const step = () => {
-                        setCurrentWordIndex(idx);
-                        const item = newSequence[idx];
-                        const gestureCount = (item.gesture_animation_ids || []).length;
-                        const duration = Math.max(800, gestureCount * 1000);
-                        idx += 1;
-                        if (idx < newSequence.length) {
-                            setTimeout(step, duration);
-                        } else {
-                            setTimeout(() => {
-                                setCurrentWordIndex(-1);
-                                setIsPlaying(false);
-                            }, duration);
-                        }
-                    };
-                    step();
-                }, 300);
+            if (stream.length > 0) {
+                setTimeout(() => playStream(stream), 300);
             }
-
         } catch (error) {
             const msg = error.message === "SESSION_EXPIRED"
                 ? "Your session has expired. Please log in again."
@@ -135,23 +148,6 @@ export function Translate() {
         } finally {
             setIsTranslating(false);
         }
-    };
-
-    const playAnimationSync = async () => {
-        if (animationSequence.length === 0 || isPlaying) return;
-        setIsPlaying(true);
-        setCurrentWordIndex(0);
-
-        for (let i = 0; i < animationSequence.length; i++) {
-            setCurrentWordIndex(i);
-            const item = animationSequence[i];
-            const gestureCount = (item.gesture_animation_ids || []).length;
-            const playbackDuration = gestureCount * 1000;
-            await new Promise((resolve) => setTimeout(resolve, Math.max(800, playbackDuration)));
-        }
-
-        setCurrentWordIndex(-1);
-        setIsPlaying(false);
     };
 
     const TABS = [
@@ -210,7 +206,6 @@ export function Translate() {
                                     <button
                                         onClick={() => setShowClearConfirm(true)}
                                         className="absolute top-2 right-2 p-1.5 text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-500/10 rounded-full transition-colors"
-                                        title="Clear input"
                                     >
                                         <X size={18} />
                                     </button>
@@ -222,14 +217,12 @@ export function Translate() {
                                             <button
                                                 onClick={() => { setInputText(""); setShowClearConfirm(false); }}
                                                 className="flex items-center gap-1 px-3 py-1.5 text-white bg-green-500 hover:bg-green-600 rounded-full transition-colors font-semibold"
-                                                title="Yes, clear"
                                             >
                                                 <Check size={18} /> Yes
                                             </button>
                                             <button
                                                 onClick={() => setShowClearConfirm(false)}
                                                 className="flex items-center gap-1 px-3 py-1.5 text-white bg-zinc-400 hover:bg-zinc-500 rounded-full transition-colors font-semibold"
-                                                title="No, cancel"
                                             >
                                                 <X size={18} /> No
                                             </button>
@@ -260,7 +253,7 @@ export function Translate() {
                                 </div>
                                 <div>
                                     <h3 className="text-xl font-bold">{isListening ? "Listening..." : "Tap to Speak"}</h3>
-                                    <p className="text-[var(--text-secondary)] mt-2 max-w-sm">Speak clearly into your microphone. The text will appear below.</p>
+                                    <p className="text-[var(--text-secondary)] mt-2 max-w-sm">Speak clearly into your microphone.</p>
                                 </div>
                                 <textarea
                                     value={inputText}
@@ -299,7 +292,6 @@ export function Translate() {
                                         <button
                                             onClick={(e) => { e.stopPropagation(); setSelectedFile(null); setInputText(""); }}
                                             className="text-[var(--text-secondary)] hover:text-red-500 transition-colors p-1"
-                                            title="Remove File"
                                         >
                                             <X size={14} />
                                         </button>
@@ -317,50 +309,53 @@ export function Translate() {
             </Card>
 
             <Card className="flex-1 flex flex-col shadow-xl overflow-hidden border-[var(--border-color)] bg-[var(--bg-surface)]">
-                <div className="flex-[2] bg-orange-50 dark:bg-zinc-900 relative group overflow-hidden flex items-center justify-center transition-colors">
-                    <div className="text-zinc-500 dark:text-zinc-600 flex flex-col items-center">
-                        <User size={64} className="mb-4" />
-                        <p className="text-xl font-mono opacity-50">{isPlaying ? "Avatar Sync Active" : "3D Avatar Core Offline"}</p>
+                <div className="flex-[2] bg-zinc-900 relative group overflow-hidden">
+                    <AvatarRenderer animationUrl={currentAnimUrl} playing={isPlaying} />
 
-                        {isPlaying && currentWordIndex >= 0 && animationSequence[currentWordIndex] && (
-                            <div className="mt-4 flex flex-col items-center animate-in fade-in zoom-in duration-300">
-                                <span className="text-sm font-bold text-[var(--primary)]">Rendering 3D Gestures & Sentiments:</span>
-                                <div className="flex gap-2 mt-2 flex-wrap justify-center max-w-[80%]">
-                                    {sentimentId && (
-                                        <span className="px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 text-blue-600 dark:text-blue-400 font-mono rounded-md shadow-sm text-sm">
-                                            {sentimentId}
-                                        </span>
-                                    )}
-                                    {(animationSequence[currentWordIndex].gesture_animation_ids || []).map((gid, i) => (
-                                        <span key={i} className="px-3 py-1.5 bg-[var(--primary)]/10 border border-[var(--primary)]/30 text-[var(--primary)] font-mono rounded-md shadow-sm text-sm">
-                                            {gid}
-                                        </span>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
+                    {isPlaying && currentIndex >= 0 && animationStream[currentIndex] && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex flex-col items-center animate-in fade-in zoom-in duration-300 pointer-events-none">
+                            <span className={`px-4 py-2 rounded-lg font-mono font-black text-lg shadow-lg ${
+                                animationStream[currentIndex].type === "sentiment"
+                                    ? "bg-blue-500/80 text-white"
+                                    : "bg-[var(--primary)]/80 text-white"
+                            }`}>
+                                {animationStream[currentIndex].token}
+                            </span>
+                            <span className="text-xs text-white/60 mt-1 uppercase tracking-widest">
+                                {animationStream[currentIndex].type}
+                            </span>
+                        </div>
+                    )}
 
-                    <div className="absolute top-4 right-4 flex gap-2">
-                        <Button size="icon" variant="ghost" className="bg-black/10 dark:bg-black/40 text-[var(--text-primary)] dark:text-white hover:bg-black/20 dark:hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
+                    {!isPlaying && !currentAnimUrl && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-600 pointer-events-none">
+                            <p className="text-sm font-mono opacity-40">3D Avatar Ready</p>
+                        </div>
+                    )}
+
+                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button size="icon" variant="ghost" className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
                             <Volume2 size={18} />
                         </Button>
-                        <Button size="icon" variant="ghost" className="bg-black/10 dark:bg-black/40 text-[var(--text-primary)] dark:text-white hover:bg-black/20 dark:hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
+                        <Button size="icon" variant="ghost" className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
                             <Settings size={18} />
                         </Button>
                     </div>
 
                     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-black/50 backdrop-blur-md px-6 py-3 rounded-full border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={() => { setIsPlaying(false); setCurrentWordIndex(-1); }}><Square size={18} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors" onClick={stopPlayback}>
+                            <Square size={18} fill="currentColor" />
+                        </button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
-                        <button className="text-white hover:text-[var(--primary)] transition-colors scale-125" onClick={playAnimationSync}><Play size={24} fill="currentColor" /></button>
+                        <button className="text-white hover:text-[var(--primary)] transition-colors scale-125" onClick={() => playStream(animationStream)} disabled={isPlaying}>
+                            <Play size={24} fill="currentColor" />
+                        </button>
                         <div className="w-px h-6 bg-white/20 mx-2"></div>
-                        <div className="w-32 h-1 bg-white/20 rounded-full cursor-pointer overflow-hidden">
+                        <div className="w-32 h-1 bg-white/20 rounded-full overflow-hidden">
                             <div
-                                className="h-full bg-[var(--primary)] transition-all duration-300 relative"
-                                style={{ width: `${animationSequence.length > 0 && currentWordIndex >= 0 ? ((currentWordIndex + 1) / animationSequence.length) * 100 : 0}%` }}
-                            >
-                            </div>
+                                className="h-full bg-[var(--primary)] transition-all duration-300"
+                                style={{ width: `${animationStream.length > 0 && currentIndex >= 0 ? ((currentIndex + 1) / animationStream.length) * 100 : 0}%` }}
+                            />
                         </div>
                     </div>
                 </div>
@@ -369,31 +364,28 @@ export function Translate() {
                     <div className="flex items-center justify-between mb-4 shrink-0">
                         <h3 className="font-bold text-lg text-[var(--text-primary)]">ASL Grammar Structure</h3>
                         <span className="text-xs px-2 py-1 rounded bg-[var(--primary)]/10 text-[var(--primary)] font-bold uppercase tracking-wider">
-                            Synced Output
+                            Token Stream
                         </span>
                     </div>
 
-                    {animationSequence.length > 0 ? (
+                    {animationStream.length > 0 ? (
                         <div className="flex flex-col h-full space-y-4">
-                            <div className="flex-1 p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner relative flex items-center justify-center overflow-x-hidden min-h-[140px]">
-                                <div className="flex gap-6 items-center flex-nowrap w-full overflow-hidden justify-center relative px-8 mask-edges">
-                                    {animationSequence.map((item, index) => {
-                                        const isCurrent = currentWordIndex === index;
-                                        const distance = Math.abs(currentWordIndex === -1 ? 0 : currentWordIndex - index);
-
-                                        if (currentWordIndex !== -1 && distance > 5) return null;
-
+                            <div className="flex-1 p-4 rounded-xl bg-[var(--bg-background)] border border-[var(--border-color)] shadow-inner flex items-center justify-center overflow-x-hidden min-h-[140px]">
+                                <div className="flex gap-4 items-center flex-wrap justify-center px-4">
+                                    {animationStream.map((item, index) => {
+                                        const isCurrent = currentIndex === index;
                                         return (
                                             <span
                                                 key={index}
-                                                className={`font-mono transition-all duration-300 select-none ${isCurrent
-                                                    ? "text-[var(--primary)] text-3xl font-black scale-110 drop-shadow-md z-10"
-                                                    : currentWordIndex === -1
-                                                        ? "text-[var(--text-secondary)] text-lg"
-                                                        : `text-[var(--text-secondary)] font-medium ${distance > 2 ? "opacity-20 text-sm" : "opacity-60 text-lg"} blur-[0.5px]`
-                                                    }`}
+                                                className={`font-mono transition-all duration-300 select-none rounded px-2 py-1 ${
+                                                    isCurrent
+                                                        ? item.type === "sentiment"
+                                                            ? "text-blue-500 text-2xl font-black scale-110 bg-blue-500/10"
+                                                            : "text-[var(--primary)] text-2xl font-black scale-110 bg-[var(--primary)]/10"
+                                                        : "text-[var(--text-secondary)] text-base opacity-60"
+                                                }`}
                                             >
-                                                {item.word}
+                                                {item.token}
                                             </span>
                                         );
                                     })}
@@ -401,9 +393,12 @@ export function Translate() {
                             </div>
 
                             <div className="flex items-center justify-end shrink-0 w-full mt-4">
-                                <Button size="sm" onClick={playAnimationSync} disabled={isPlaying} className="rounded-full shadow-lg shrink-0">
-                                    {isPlaying ? <Square fill="currentColor" size={14} className="mr-2" /> : <Play fill="currentColor" size={14} className="mr-2" />}
-                                    {isPlaying ? "Playing..." : "Play Sync"}
+                                <Button
+                                    size="sm"
+                                    onClick={() => isPlaying ? stopPlayback() : playStream(animationStream)}
+                                    className="rounded-full shadow-lg shrink-0"
+                                >
+                                    {isPlaying ? <><Square fill="currentColor" size={14} className="mr-2" /> Stop</> : <><Play fill="currentColor" size={14} className="mr-2" /> Play Sync</>}
                                 </Button>
                             </div>
                         </div>

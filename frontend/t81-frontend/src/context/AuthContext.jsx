@@ -21,6 +21,7 @@ export const AuthProvider = ({ children }) => {
 
     const logout = useCallback(() => {
         localStorage.removeItem("sf_jwt");
+        localStorage.removeItem("sf_csrf");
         setJwt(null);
         setIsLoggedIn(false);
         setUser(null);
@@ -47,8 +48,9 @@ export const AuthProvider = ({ children }) => {
         }
     }, [fetchUserProfile]);
 
-    const _applyToken = (token) => {
+    const _applyToken = (token, csrfToken) => {
         localStorage.setItem("sf_jwt", token);
+        if (csrfToken) localStorage.setItem("sf_csrf", csrfToken);
         setJwt(token);
         setIsLoggedIn(true);
     };
@@ -59,7 +61,7 @@ export const AuthProvider = ({ children }) => {
         formBody.append("password", password);
 
         const data = await api.postForm("/auth/login", formBody.toString());
-        _applyToken(data.access_token);
+        _applyToken(data.access_token, data.csrf_token);
         await fetchUserProfile();
         return true;
     };
@@ -72,7 +74,7 @@ export const AuthProvider = ({ children }) => {
 
     const googleLogin = async (accessToken) => {
         const data = await api.post("/auth/google", { access_token: accessToken });
-        _applyToken(data.access_token);
+        _applyToken(data.access_token, data.csrf_token);
         await fetchUserProfile();
         return { isNew: data.is_new_user === true };
     };

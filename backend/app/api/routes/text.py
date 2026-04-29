@@ -50,4 +50,4 @@ async def accept_text_input(
 
     duration = time.monotonic() - start_time
     logger.info(f"Route: Request completed in {duration:.3f}s for user {current_user.id}.")
-    return success_response("Translation successful", data=result)
+    return success_response("Translation successful", data=result.model_dump())

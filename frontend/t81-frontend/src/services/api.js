@@ -1,11 +1,14 @@
 const BASE_URL = import.meta.env.VITE_API_URL;
 
 const getToken = () => localStorage.getItem("sf_jwt");
+const getCsrfToken = () => localStorage.getItem("sf_csrf");
 
 const buildHeaders = (extra = {}) => {
     const token = getToken();
+    const csrf = getCsrfToken();
     const headers = { ...extra };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (csrf) headers["X-CSRF-Token"] = csrf;
     return headers;
 };
 
@@ -18,6 +21,7 @@ const parseError = async (response) => {
     }
     try {
         const body = await response.json();
+        if (body.message) return new Error(body.message);
         if (Array.isArray(body.detail)) return new Error(body.detail[0].msg);
         if (typeof body.detail === "string") return new Error(body.detail);
     } catch (_) {
@@ -49,7 +53,8 @@ const request = async (method, path, options = {}) => {
         throw await parseError(response);
     }
 
-    return response.json();
+    const json = await response.json();
+    return json.data !== undefined ? json.data : json;
 };
 
 export const api = {

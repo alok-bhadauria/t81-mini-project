@@ -87,7 +87,7 @@ class PipelineOrchestrator:
         processed_text: str,
         emotion_id: str,
         asl_grammar_output: str,
-        animation_package: dict,
+        animation_stream: list,
         file_metadata: dict,
         source: str,
     ) -> None:
@@ -99,9 +99,7 @@ class PipelineOrchestrator:
                 processed_text=processed_text,
                 emotion_id=emotion_id,
                 asl_grammar_output=asl_grammar_output,
-                sentiment_animation_id=animation_package["sentiment_animation_id"],
-                gesture_animation_ids=animation_package["gesture_animation_ids"],
-                animation_sequence=animation_package["animation_sequence"],
+                animation_stream=[t.dict() for t in animation_stream],
                 file_metadata={**(file_metadata or {}), "translation_source": source},
             )
         except Exception:
@@ -157,12 +155,17 @@ class PipelineOrchestrator:
 
         asl_tokens = [t.strip().upper() for t in asl_tokens if t.strip()]
         asl_grammar_output = asl_grammar_output.strip()
-        
+
         if not asl_tokens or not asl_grammar_output:
             logger.error(f"Orchestrator: Validation failed. Empty ASL output. user_id={user_id}")
             raise AppException("Translation resulted in empty output.", 500)
 
-        animation_package = self.animation.map(emotion_id, asl_tokens)
+        api_response = self.output_handler.format_api_response(
+            processed_text=processed_text,
+            asl_grammar_output=asl_grammar_output,
+            asl_tokens=asl_tokens,
+            emotion_id=emotion_id,
+        )
 
         duration = time.monotonic() - start_time
         logger.info(
@@ -176,17 +179,9 @@ class PipelineOrchestrator:
             processed_text=processed_text,
             emotion_id=emotion_id,
             asl_grammar_output=asl_grammar_output,
-            animation_package=animation_package,
+            animation_stream=api_response.animation_stream,
             file_metadata=file_metadata,
             source=source,
         )
 
-        api_response = self.output_handler.format_api_response(
-            processed_text=processed_text,
-            asl_grammar_output=asl_grammar_output,
-            sentiment_animation_id=animation_package["sentiment_animation_id"],
-            gesture_animation_ids=animation_package["gesture_animation_ids"],
-            animation_sequence=animation_package["animation_sequence"],
-        )
-        
         return api_response, persist_kwargs
