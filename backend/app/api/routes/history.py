@@ -10,7 +10,6 @@ from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/api/v1/history", tags=["history"])
 
-
 @router.get("", summary="Get User History", description="Retrieves the past 50 translation items for the authenticated user.")
 @limiter.limit("30/minute")
 async def get_history(
