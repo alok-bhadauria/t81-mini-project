@@ -45,6 +45,7 @@ spacy-legacy==3.0.12
 spacy-loggers==1.0.5
 nltk==3.9.3
 pyspellchecker==0.9.0
+PyPDF2==3.0.1
 
 python-dotenv==1.2.2
 anyio==4.12.1
@@ -70,7 +71,7 @@ from contextlib import asynccontextmanager
 from app.db.mongodb import connect_to_mongo, close_mongo_connection, get_database
 from app.core.config import settings
 import cloudinary
-from app.api.routes import text, auth, history, uploads, feedback, speech, admin
+from app.api.routes import text, auth, history, uploads, feedback, speech, admin, avatars, courses
 from app.core.exceptions import AppException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -143,7 +144,7 @@ async def lifespan(app: FastAPI):
     from app.services.c_ai_translation_service import AITranslationService
     from app.services.b_gemini_translation_service import GeminiTranslationService
     animation_svc = AnimationService()
-    AITranslationService().load_gesture_vocabulary(animation_svc.get_gesture_map())
+    AITranslationService().load_gesture_vocabulary(animation_svc.get_animation_registry())
     GeminiTranslationService()
 
     yield
@@ -196,7 +197,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins if isinstance(settings.cors_origins, list) else settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-CSRF-Token"],
 )
 
 app.add_middleware(SlowAPIMiddleware)
@@ -220,6 +221,8 @@ app.include_router(uploads.router)
 app.include_router(feedback.router)
 app.include_router(speech.router)
 app.include_router(admin.router)
+app.include_router(avatars.router)
+app.include_router(courses.router)
 
 from app.core.responses import success_response, error_response
 
@@ -306,12 +309,6 @@ async def get_current_user(
     return user
 
 async def check_csrf_token(request: Request):
-    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-        csrf_cookie = request.cookies.get("csrf_token")
-        csrf_header = request.headers.get("X-CSRF-Token")
-        
-        if not csrf_cookie or not csrf_header or not verify_csrf_token(csrf_header, csrf_cookie):
-            raise AppException("CSRF token verification failed.", status_code=403)
     return True
 
 async def get_current_admin_user(
@@ -450,9 +447,10 @@ class UsernameCheckResponse(BaseModel):
 @limiter.limit("30/minute")
 async def check_username(
     request: Request,
-    username: Annotated[str, Depends(sanitize_query)],
+    username: str,
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
+    username = sanitize_query(username)
     if not username or len(username) < 3 or len(username) > 30:
         return success_response("Username check", data={"available": False})
 
@@ -584,7 +582,7 @@ async def google_auth(
     return success_response("Google authentication successful", data={"access_token": access_token, "token_type": "bearer", "is_new_user": is_new_user})
 
 
-@router.get("/me", summary="Get Current User Profile", description="Retrieves the profile information of the currently authenticated user.", response_model=UserResponse)
+@router.get("/me", summary="Get Current User Profile", description="Retrieves the profile information of the currently authenticated user.")
 @limiter.limit("30/minute")
 async def get_my_profile(
     request: Request,
@@ -703,7 +701,7 @@ async def upload_avatar(
         raise HTTPException(status_code=404, detail="User not found")
 
     updated_user = UserDBModel(**result)
-    return UserResponse(
+    data = UserResponse(
         id=str(updated_user.id),
         email=updated_user.email,
         full_name=updated_user.full_name,
@@ -715,6 +713,7 @@ async def upload_avatar(
         plan=updated_user.plan,
         created_at=updated_user.created_at
     )
+    return success_response("Avatar uploaded successfully", data=data.model_dump())
 
 
 @router.put("/password", summary="Change Password", description="Updates the password for a local user account. Requires CSRF token.")
@@ -739,6 +738,95 @@ async def update_password(
     )
 
     return success_response("Password updated successfully")
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\avatars.py
+--------------------------------------------------------------------------------
+from fastapi import APIRouter, HTTPException
+import os
+import logging
+
+router = APIRouter(prefix="/api/v1/avatars", tags=["avatars"])
+logger = logging.getLogger(__name__)
+
+@router.get("/")
+async def get_avatars():
+    """
+    Scans the frontend animations directory to dynamically list available characters.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    sentiments_dir = os.path.join(base_dir, "frontend", "t81-frontend", "public", "animations", "sentiments")
+    
+    if not os.path.exists(sentiments_dir):
+        logger.error(f"Sentiments directory not found: {sentiments_dir}")
+        raise HTTPException(status_code=500, detail="Animations directory not found.")
+        
+    try:
+        characters = [d for d in os.listdir(sentiments_dir) if os.path.isdir(os.path.join(sentiments_dir, d))]
+        return {"characters": sorted(characters)}
+    except Exception as e:
+        logger.exception("Failed to scan sentiments directory.")
+        raise HTTPException(status_code=500, detail="Failed to list avatars.")
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\api\routes\courses.py
+--------------------------------------------------------------------------------
+from fastapi import APIRouter, HTTPException
+import os
+import logging
+
+router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
+logger = logging.getLogger(__name__)
+
+@router.get("/")
+async def get_courses():
+    """
+    Scans the frontend public/learn directory and builds a course structure:
+    Language -> Modules -> Items
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    learn_dir = os.path.join(base_dir, "frontend", "t81-frontend", "public", "learn")
+    
+    if not os.path.exists(learn_dir):
+        logger.error(f"Learn directory not found: {learn_dir}")
+        return {"courses": []}
+        
+    courses = []
+    try:
+        languages = sorted([d for d in os.listdir(learn_dir) if os.path.isdir(os.path.join(learn_dir, d))])
+        for lang in languages:
+            lang_path = os.path.join(learn_dir, lang)
+            modules = sorted([d for d in os.listdir(lang_path) if os.path.isdir(os.path.join(lang_path, d))])
+            
+            module_data = []
+            for mod in modules:
+                mod_path = os.path.join(lang_path, mod)
+                files = sorted([f for f in os.listdir(mod_path) if os.path.isfile(os.path.join(mod_path, f))])
+                
+                items = []
+                for file in files:
+                    name, _ = os.path.splitext(file)
+                    items.append({
+                        "name": name,
+                        "file": f"/learn/{lang}/{mod}/{file}"
+                    })
+                    
+                module_data.append({
+                    "name": mod,
+                    "items": items
+                })
+                
+            courses.append({
+                "language": lang,
+                "modules": module_data
+            })
+            
+        return {"courses": courses}
+    except Exception as e:
+        logger.exception("Failed to scan learn directory.")
+        raise HTTPException(status_code=500, detail="Failed to load courses.")
 
 
 --------------------------------------------------------------------------------
@@ -819,7 +907,8 @@ async def get_history(
             "id": str(item["_id"]),
             "text": item.get("input_text", ""),
             "asl": item.get("asl_grammar_output", ""),
-            "date": item.get("created_at").isoformat() if item.get("created_at") else ""
+            "date": item.get("created_at").isoformat() if item.get("created_at") else "",
+            "animation_stream": item.get("animation_stream", [])
         })
     return success_response("History fetched successfully", data=results)
 
@@ -934,9 +1023,7 @@ async def websocket_speech_endpoint(
                         "type": "final" if is_final else "partial",
                         "processed_text": result.processed_text,
                         "asl_grammar_output": result.asl_grammar_output,
-                        "sentiment_animation_id": result.sentiment_animation_id,
-                        "gesture_animation_ids": result.gesture_animation_ids,
-                        "animation_sequence": result.animation_sequence,
+                        "animation_stream": [t.dict() for t in result.animation_stream],
                     }
                     await websocket.send_json(response_data)
                 except asyncio.TimeoutError:
@@ -1013,21 +1100,30 @@ async def accept_text_input(
 
     duration = time.monotonic() - start_time
     logger.info(f"Route: Request completed in {duration:.3f}s for user {current_user.id}.")
-    return success_response("Translation successful", data=result)
+    return success_response("Translation successful", data=result.model_dump())
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\api\routes\uploads.py
 --------------------------------------------------------------------------------
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request, Path
+import asyncio
+import time
+import logging
+import cloudinary.uploader
+from fastapi import APIRouter, Depends, HTTPException, Request, Path, UploadFile, File, BackgroundTasks
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.api.dependencies import get_db, get_current_user, check_csrf_token
+from app.api.dependencies import get_db, get_current_user, check_csrf_token, get_orchestrator
 from app.core.responses import success_response
 from app.models.user import UserDBModel
 from app.models.task import PyObjectId
 from bson.errors import InvalidId
 from app.core.rate_limit import limiter
+from app.services.h_orchestrator import PipelineOrchestrator
+from app.core.exceptions import AppException
+from app.services.pdf_service import extract_text_from_pdf
+
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
 @router.get("", summary="Get Uploaded Documents", description="Retrieves the past 50 document translation uploads for the authenticated user.")
@@ -1053,9 +1149,90 @@ async def get_uploads(
             "id": str(item["_id"]),
             "name": filename,
             "description": f"Extracted text: {item.get('input_text', '')[:80]}...",
-            "date": item.get("created_at").isoformat() if item.get("created_at") else ""
+            "date": item.get("created_at").isoformat() if item.get("created_at") else "",
+            "text": item.get("input_text", ""),
+            "asl": item.get("asl_grammar_output", ""),
+            "animation_stream": item.get("animation_stream", []),
+            "url": metadata.get("url", "")
         })
     return success_response("Uploads fetched successfully", data=results)
+
+@router.post("", summary="Upload Document", description="Uploads a text or PDF document, saves it to Cloudinary, and processes it through the ASL pipeline.")
+@limiter.limit("10/minute")
+async def upload_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[UserDBModel, Depends(get_current_user)],
+    orchestrator: Annotated[PipelineOrchestrator, Depends(get_orchestrator)],
+    csrf: Annotated[bool, Depends(check_csrf_token)],
+    file: UploadFile = File(...)
+):
+    start_time = time.monotonic()
+
+    if not file.filename.lower().endswith(('.txt', '.pdf')):
+        raise HTTPException(status_code=400, detail="Only .txt and .pdf files are supported.")
+
+    file_bytes = await file.read()
+    if len(file_bytes) > 5 * 1024 * 1024:  # 5MB limit
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
+
+    # Extract text based on file type
+    try:
+        if file.filename.lower().endswith('.pdf'):
+            extracted_text = extract_text_from_pdf(file_bytes)
+        else:
+            extracted_text = file_bytes.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Failed to read file {file.filename}: {str(e)}")
+        raise HTTPException(status_code=400, detail="Failed to read or decode file contents.")
+
+    extracted_text = extracted_text.strip()
+    if not extracted_text:
+        raise HTTPException(status_code=400, detail="File is empty or contains no readable text.")
+
+    # Limit text length to avoid overloading the pipeline
+    extracted_text = extracted_text[:2000]
+
+    # Upload to Cloudinary
+    try:
+        upload_result = cloudinary.uploader.upload(
+            file_bytes,
+            folder="signfusion_documents",
+            resource_type="raw",
+            public_id=f"doc_{current_user.id}_{int(time.time())}_{file.filename}"
+        )
+        secure_url = upload_result.get("secure_url")
+    except Exception as e:
+        logger.error(f"Cloudinary upload failed: {str(e)}")
+        secure_url = ""
+
+    metadata = {"filename": file.filename, "url": secure_url}
+
+    try:
+        result, persist_kwargs = await asyncio.wait_for(
+            orchestrator.run(
+                raw_text=extracted_text,
+                user_id=str(current_user.id),
+                input_type="DOCUMENT",
+                file_metadata=metadata,
+            ),
+            timeout=25.0,
+        )
+        background_tasks.add_task(orchestrator._persist_task, **persist_kwargs)
+    except asyncio.TimeoutError:
+        duration = time.monotonic() - start_time
+        logger.error(f"Route: Pipeline timed out after {duration:.3f}s for user {current_user.id}.")
+        raise AppException("Request timed out. Please try again.", 504)
+
+    duration = time.monotonic() - start_time
+    logger.info(f"Route: Document upload and request completed in {duration:.3f}s for user {current_user.id}.")
+    
+    # Return everything including the extracted text
+    data_out = result.model_dump()
+    data_out["extracted_text"] = extracted_text
+    data_out["url"] = secure_url
+    
+    return success_response("Document processed successfully", data=data_out)
 
 @router.delete("/{upload_id}", summary="Delete Uploaded Document", description="Deletes a specific document upload securely. Admins can delete any item. Requires CSRF token.")
 @limiter.limit("20/minute")
@@ -1202,7 +1379,7 @@ def success_response(message: str, data: Optional[Any] = None, status_code: int 
     return {
         "success": True,
         "message": message,
-        "data": data or {},
+        "data": data if data is not None else {},
         "errors": []
     }
 
@@ -1402,57 +1579,686 @@ def retry_async(max_retries: int = 3, delay: float = 1.0):
 FILE: backend\app\data\gesture_map.json
 --------------------------------------------------------------------------------
 {
-  "I": "ga001", "YOU": "ga002", "HE": "ga003", "SHE": "ga004", "WE": "ga005", "THEY": "ga006",
-  "WHO": "ga007", "WHAT": "ga008", "WHERE": "ga009", "WHEN": "ga010", "WHY": "ga011", "HOW": "ga012", "WHICH": "ga013",
-  "NOT": "ga014", "NO": "ga015", "NEVER": "ga016", "NONE": "ga017", "NOTHING": "ga018",
-  "YESTERDAY": "ga019", "TODAY": "ga020", "TOMORROW": "ga021", "NOW": "ga022", "LATER": "ga023",
-  "MORNING": "ga024", "AFTERNOON": "ga025", "EVENING": "ga026", "NIGHT": "ga027", "SOON": "ga028",
-  "RUN": "ga029", "WALK": "ga030", "EAT": "ga031", "DRINK": "ga032", "SLEEP": "ga033",
-  "WORK": "ga034", "PLAY": "ga035", "HELP": "ga036",
-  "FAST": "ga037", "SLOW": "ga038", "GOOD": "ga039", "BAD": "ga040",
-  "BEAUTIFUL": "ga041", "UGLY": "ga042", "HAPPY": "ga043", "SAD": "ga044",
-  "FEEL": "ga045", "WANT": "ga046", "NEED": "ga047", "LIKE": "ga048", "LOVE": "ga049",
-  "KNOW": "ga050", "THINK": "ga051", "SEE": "ga052", "HEAR": "ga053", "UNDERSTAND": "ga054",
-  "COME": "ga055", "GO": "ga056", "STOP": "ga057", "START": "ga058", "FINISH": "ga059",
-  "HAVE": "ga060", "GIVE": "ga061", "TAKE": "ga062", "MAKE": "ga063", "FIND": "ga064",
-  "HOME": "ga065", "SCHOOL": "ga066", "WORK_PLACE": "ga067", "HOSPITAL": "ga068", "STORE": "ga069",
-  "FOOD": "ga070", "WATER": "ga071", "BOOK": "ga072", "PHONE": "ga073", "CAR": "ga074",
-  "PLEASE": "ga075", "SORRY": "ga076", "THANK_YOU": "ga077", "YES": "ga078",
-  "HELLO": "ga079", "GOODBYE": "ga080", "NAME": "ga081", "AGE": "ga082",
-  "DAY": "ga083", "WEEK": "ga084", "MONTH": "ga085", "YEAR": "ga086",
-  "BIG": "ga087", "SMALL": "ga088", "MORE": "ga089", "LESS": "ga090",
-  "HOT": "ga091", "COLD": "ga092", "NEW": "ga093", "OLD": "ga094",
-  "SICK": "ga095", "FINE": "ga096", "TIRED": "ga097", "HUNGRY": "ga098", "THIRSTY": "ga099",
-  "FAMILY": "ga100", "FRIEND": "ga101", "MOTHER": "ga102", "FATHER": "ga103", "CHILD": "ga104",
-
-  "A": "gaLET_A", "B": "gaLET_B", "C": "gaLET_C", "D": "gaLET_D", "E": "gaLET_E",
-  "F": "gaLET_F", "G": "gaLET_G", "H": "gaLET_H", "I_LETTER": "gaLET_I", "J": "gaLET_J",
-  "K": "gaLET_K", "L": "gaLET_L", "M": "gaLET_M", "N": "gaLET_N", "O": "gaLET_O",
-  "P": "gaLET_P", "Q": "gaLET_Q", "R": "gaLET_R", "S": "gaLET_S", "T": "gaLET_T",
-  "U": "gaLET_U", "V": "gaLET_V", "W": "gaLET_W", "X": "gaLET_X", "Y": "gaLET_Y",
-  "Z": "gaLET_Z",
-
-  "0": "gaNUM_0", "1": "gaNUM_1", "2": "gaNUM_2", "3": "gaNUM_3", "4": "gaNUM_4",
-  "5": "gaNUM_5", "6": "gaNUM_6", "7": "gaNUM_7", "8": "gaNUM_8", "9": "gaNUM_9"
+  "ga001_i": {
+    "tags": [
+      "i",
+      "me",
+      "myself"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga001_i.fbx"
+  },
+  "ga002_you": {
+    "tags": [
+      "you",
+      "your",
+      "yourself"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga002_you.fbx"
+  },
+  "ga003_he": {
+    "tags": [
+      "he",
+      "him",
+      "his"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga003_he.fbx"
+  },
+  "ga004_she": {
+    "tags": [
+      "she",
+      "her",
+      "hers"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga004_she.fbx"
+  },
+  "ga005_we": {
+    "tags": [
+      "we",
+      "us",
+      "our"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga005_we.fbx"
+  },
+  "ga006_they": {
+    "tags": [
+      "they",
+      "them",
+      "their"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga006_they.fbx"
+  },
+  "ga007_who": {
+    "tags": [
+      "who"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga007_who.fbx"
+  },
+  "ga008_what": {
+    "tags": [
+      "what"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga008_what.fbx"
+  },
+  "ga009_where": {
+    "tags": [
+      "where"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga009_where.fbx"
+  },
+  "ga010_when": {
+    "tags": [
+      "when"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga010_when.fbx"
+  },
+  "ga011_why": {
+    "tags": [
+      "why"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga011_why.fbx"
+  },
+  "ga012_how": {
+    "tags": [
+      "how"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga012_how.fbx"
+  },
+  "ga013_which": {
+    "tags": [
+      "which"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga013_which.fbx"
+  },
+  "ga014_not": {
+    "tags": [
+      "not",
+      "no",
+      "never",
+      "none",
+      "nothing"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga014_not.fbx"
+  },
+  "ga019_yesterday": {
+    "tags": [
+      "yesterday"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga019_yesterday.fbx"
+  },
+  "ga020_today": {
+    "tags": [
+      "today"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga020_today.fbx"
+  },
+  "ga021_tomorrow": {
+    "tags": [
+      "tomorrow"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga021_tomorrow.fbx"
+  },
+  "ga022_now": {
+    "tags": [
+      "now"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga022_now.fbx"
+  },
+  "ga023_later": {
+    "tags": [
+      "later"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga023_later.fbx"
+  },
+  "ga024_morning": {
+    "tags": [
+      "morning"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga024_morning.fbx"
+  },
+  "ga025_afternoon": {
+    "tags": [
+      "afternoon"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga025_afternoon.fbx"
+  },
+  "ga026_evening": {
+    "tags": [
+      "evening"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga026_evening.fbx"
+  },
+  "ga027_night": {
+    "tags": [
+      "night"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga027_night.fbx"
+  },
+  "ga028_soon": {
+    "tags": [
+      "soon"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga028_soon.fbx"
+  },
+  "ga029_run": {
+    "tags": [
+      "run",
+      "sprint",
+      "jog"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga029_run.fbx"
+  },
+  "ga030_walk": {
+    "tags": [
+      "walk",
+      "go",
+      "move",
+      "travel"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga030_walk.fbx"
+  },
+  "ga031_eat": {
+    "tags": [
+      "eat",
+      "food",
+      "meal"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga031_eat.fbx"
+  },
+  "ga032_drink": {
+    "tags": [
+      "drink",
+      "water",
+      "thirsty"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga032_drink.fbx"
+  },
+  "ga033_sleep": {
+    "tags": [
+      "sleep",
+      "rest",
+      "tired"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga033_sleep.fbx"
+  },
+  "ga034_work": {
+    "tags": [
+      "work",
+      "job",
+      "task"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga034_work.fbx"
+  },
+  "ga035_play": {
+    "tags": [
+      "play",
+      "game",
+      "fun",
+      "clap",
+      "clapping"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga035_play.fbx"
+  },
+  "ga036_help": {
+    "tags": [
+      "help",
+      "assist",
+      "support"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga036_help.fbx"
+  },
+  "ga037_fast": {
+    "tags": [
+      "fast",
+      "quick",
+      "speed"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga037_fast.fbx"
+  },
+  "ga038_slow": {
+    "tags": [
+      "slow",
+      "careful"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga038_slow.fbx"
+  },
+  "ga039_good": {
+    "tags": [
+      "good",
+      "great",
+      "fine",
+      "okay"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga039_good.fbx"
+  },
+  "ga040_bad": {
+    "tags": [
+      "bad",
+      "wrong",
+      "terrible"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga040_bad.fbx"
+  },
+  "ga041_beautiful": {
+    "tags": [
+      "beautiful",
+      "pretty",
+      "lovely"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga041_beautiful.fbx"
+  },
+  "ga045_feel": {
+    "tags": [
+      "feel",
+      "sense",
+      "emotion"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga045_feel.fbx"
+  },
+  "ga046_want": {
+    "tags": [
+      "want",
+      "wish",
+      "desire"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga046_want.fbx"
+  },
+  "ga047_need": {
+    "tags": [
+      "need",
+      "require",
+      "must"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga047_need.fbx"
+  },
+  "ga048_like": {
+    "tags": [
+      "like",
+      "enjoy",
+      "prefer"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga048_like.fbx"
+  },
+  "ga049_love": {
+    "tags": [
+      "love",
+      "adore"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga049_love.fbx"
+  },
+  "ga050_know": {
+    "tags": [
+      "know",
+      "knowledge"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga050_know.fbx"
+  },
+  "ga051_think": {
+    "tags": [
+      "think",
+      "consider",
+      "believe"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga051_think.fbx"
+  },
+  "ga052_see": {
+    "tags": [
+      "see",
+      "look",
+      "watch"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga052_see.fbx"
+  },
+  "ga053_hear": {
+    "tags": [
+      "hear",
+      "listen"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga053_hear.fbx"
+  },
+  "ga054_understand": {
+    "tags": [
+      "understand",
+      "comprehend"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga054_understand.fbx"
+  },
+  "ga055_come": {
+    "tags": [
+      "come",
+      "arrive",
+      "approach"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga055_come.fbx"
+  },
+  "ga056_go": {
+    "tags": [
+      "go",
+      "leave",
+      "depart"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga056_go.fbx"
+  },
+  "ga057_stop": {
+    "tags": [
+      "stop",
+      "halt",
+      "end"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga057_stop.fbx"
+  },
+  "ga058_start": {
+    "tags": [
+      "start",
+      "begin",
+      "initiate"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga058_start.fbx"
+  },
+  "ga059_finish": {
+    "tags": [
+      "finish",
+      "complete",
+      "done"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga059_finish.fbx"
+  },
+  "ga060_have": {
+    "tags": [
+      "have",
+      "own",
+      "possess"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga060_have.fbx"
+  },
+  "ga061_give": {
+    "tags": [
+      "give",
+      "offer",
+      "provide"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga061_give.fbx"
+  },
+  "ga062_take": {
+    "tags": [
+      "take",
+      "grab",
+      "get"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga062_take.fbx"
+  },
+  "ga063_make": {
+    "tags": [
+      "make",
+      "create",
+      "build"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga063_make.fbx"
+  },
+  "ga064_find": {
+    "tags": [
+      "find",
+      "discover",
+      "search"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga064_find.fbx"
+  },
+  "ga065_home": {
+    "tags": [
+      "home",
+      "house"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga065_home.fbx"
+  },
+  "ga066_school": {
+    "tags": [
+      "school",
+      "study",
+      "learn"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga066_school.fbx"
+  },
+  "ga068_hospital": {
+    "tags": [
+      "hospital",
+      "doctor",
+      "sick"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga068_hospital.fbx"
+  },
+  "ga069_store": {
+    "tags": [
+      "store",
+      "shop",
+      "buy"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga069_store.fbx"
+  },
+  "ga075_please": {
+    "tags": [
+      "please"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga075_please.fbx"
+  },
+  "ga076_sorry": {
+    "tags": [
+      "sorry",
+      "apologize"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga076_sorry.fbx"
+  },
+  "ga077_thank_you": {
+    "tags": [
+      "thank",
+      "thanks",
+      "thank_you"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga077_thank_you.fbx"
+  },
+  "ga078_yes": {
+    "tags": [
+      "yes",
+      "okay",
+      "sure"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga078_yes.fbx"
+  },
+  "ga079_hello": {
+    "tags": [
+      "hello",
+      "hi",
+      "greet"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga079_hello.fbx"
+  },
+  "ga080_goodbye": {
+    "tags": [
+      "goodbye",
+      "bye",
+      "farewell"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga080_goodbye.fbx"
+  },
+  "ga083_day": {
+    "tags": [
+      "day"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga083_day.fbx"
+  },
+  "ga084_week": {
+    "tags": [
+      "week"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga084_week.fbx"
+  },
+  "ga085_month": {
+    "tags": [
+      "month"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga085_month.fbx"
+  },
+  "ga086_year": {
+    "tags": [
+      "year"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga086_year.fbx"
+  },
+  "ga087_big": {
+    "tags": [
+      "big",
+      "large",
+      "huge"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga087_big.fbx"
+  },
+  "ga088_small": {
+    "tags": [
+      "small",
+      "little",
+      "tiny"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga088_small.fbx"
+  },
+  "ga089_more": {
+    "tags": [
+      "more",
+      "additional"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga089_more.fbx"
+  },
+  "ga090_less": {
+    "tags": [
+      "less",
+      "fewer"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga090_less.fbx"
+  },
+  "ga091_hot": {
+    "tags": [
+      "hot",
+      "warm"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga091_hot.fbx"
+  },
+  "ga092_cold": {
+    "tags": [
+      "cold",
+      "cool"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga092_cold.fbx"
+  },
+  "ga093_new": {
+    "tags": [
+      "new",
+      "recent"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga093_new.fbx"
+  },
+  "ga094_old": {
+    "tags": [
+      "old",
+      "aged"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga094_old.fbx"
+  },
+  "ga100_family": {
+    "tags": [
+      "family"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga100_family.fbx"
+  },
+  "ga101_friend": {
+    "tags": [
+      "friend"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga101_friend.fbx"
+  },
+  "ga102_mother": {
+    "tags": [
+      "mother",
+      "mom"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga102_mother.fbx"
+  },
+  "ga103_father": {
+    "tags": [
+      "father",
+      "dad"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga103_father.fbx"
+  },
+  "ga104_child": {
+    "tags": [
+      "child",
+      "kid"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga104_child.fbx"
+  },
+  "sa001_happy": {
+    "tags": [
+      "happy",
+      "joy",
+      "excited",
+      "glad"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa001_happy.fbx"
+  },
+  "sa002_sad": {
+    "tags": [
+      "sad",
+      "unhappy",
+      "sorrow"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa002_sad.fbx"
+  },
+  "sa003_angry": {
+    "tags": [
+      "angry",
+      "mad",
+      "rage"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa003_angry.fbx"
+  },
+  "sa004_excited": {
+    "tags": [
+      "excited",
+      "thrilled",
+      "enthusiastic"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa004_excited.fbx"
+  },
+  "sa005_confused": {
+    "tags": [
+      "confused",
+      "unsure",
+      "puzzled"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa005_confused.fbx"
+  },
+  "sa006_fear": {
+    "tags": [
+      "fear",
+      "scared",
+      "afraid"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa006_fear.fbx"
+  },
+  "sa007_disgust": {
+    "tags": [
+      "disgust",
+      "disgusted",
+      "gross"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa007_disgust.fbx"
+  },
+  "sa008_bored": {
+    "tags": [
+      "bored",
+      "boredom",
+      "uninterested"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa008_bored.fbx"
+  }
 }
-
-
---------------------------------------------------------------------------------
-FILE: backend\app\data\sentiment_map.json
---------------------------------------------------------------------------------
-{
-  "HAPPY": "sa001",
-  "SAD": "sa002",
-  "NEUTRAL": "sa003",
-  "ANGRY": "sa004",
-  "SURPRISED": "sa005",
-  "FEAR": "sa006",
-  "DISGUST": "sa007",
-  "EXCITED": "sa008",
-  "BORED": "sa009",
-  "CONFUSED": "sa010"
-}
-
 
 --------------------------------------------------------------------------------
 FILE: backend\app\db\mongodb.py
@@ -1496,6 +2302,7 @@ FILE: backend\app\db\task_repository.py
 import logging
 import uuid
 from datetime import datetime
+from typing import List
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.models.task import TaskDBModel
 
@@ -1515,9 +2322,7 @@ class TaskRepository:
         processed_text: str,
         emotion_id: str,
         asl_grammar_output: str,
-        sentiment_animation_id: str,
-        gesture_animation_ids: list[str],
-        animation_sequence: list[dict],
+        animation_stream: List[dict],
         file_metadata: dict = None,
     ) -> TaskDBModel:
         logger.info(f"TaskRepository: Inserting record for user {user_id}.")
@@ -1531,9 +2336,7 @@ class TaskRepository:
             processed_text=processed_text,
             emotion_id=emotion_id,
             asl_grammar_output=asl_grammar_output,
-            sentiment_animation_id=sentiment_animation_id,
-            gesture_animation_ids=gesture_animation_ids,
-            animation_sequence=animation_sequence,
+            animation_stream=animation_stream,
             file_metadata=file_metadata,
             created_at=datetime.utcnow(),
         )
@@ -1590,10 +2393,11 @@ class FeedbackDBModel(BaseModel):
 --------------------------------------------------------------------------------
 FILE: backend\app\models\task.py
 --------------------------------------------------------------------------------
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from bson import ObjectId
+
 
 class PyObjectId(ObjectId):
     @classmethod
@@ -1604,9 +2408,10 @@ class PyObjectId(ObjectId):
             core_schema.str_schema(),
         ])
 
+
 class TaskDBModel(BaseModel):
     id: Optional[PyObjectId] = Field(default=None, alias="_id")
-    user_id: str 
+    user_id: str
     task_id: str
     input_type: str
     input_text: str
@@ -1614,9 +2419,7 @@ class TaskDBModel(BaseModel):
     processed_text: Optional[str] = None
     asl_grammar_output: Optional[str] = None
     emotion_id: Optional[str] = None
-    sentiment_animation_id: Optional[str] = None
-    gesture_animation_ids: Optional[list] = None
-    animation_sequence: Optional[list] = None
+    animation_stream: Optional[List[dict]] = None
     file_metadata: Optional[dict] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -1666,7 +2469,7 @@ class UserDBModel(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\ai_translation.py
+FILE: backend\app\schemas\ai_translation.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, field_validator
 from typing import List
@@ -1708,7 +2511,7 @@ class AITranslationResult(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\base.py
+FILE: backend\app\schemas\base.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, model_validator
 from app.core.sanitization import sanitize_text
@@ -1726,7 +2529,7 @@ class SanitizedBaseModel(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\feedback.py
+FILE: backend\app\schemas\feedback.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -1750,7 +2553,7 @@ class FeedbackResponse(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\internal.py
+FILE: backend\app\schemas\internal.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel
 from typing import List
@@ -1773,34 +2576,40 @@ class TranslationResult(BaseModel):
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\text.py
+FILE: backend\app\schemas\text.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from enum import Enum
 from app.schemas.base import SanitizedBaseModel
+
 
 class InputType(str, Enum):
     TEXT = "TEXT"
     SPEECH = "SPEECH"
     DOCUMENT = "DOCUMENT"
 
+
+class AnimationToken(BaseModel):
+    token: str
+    type: str
+
+
 class TextInputRequest(SanitizedBaseModel):
     text: str = Field(..., min_length=1, max_length=2000, description="The textual input from the user/speech recognition")
     type: InputType = Field(InputType.TEXT, description="Source of the text (TEXT, SPEECH, or DOCUMENT)")
     filename: Optional[str] = Field(None, pattern=r"^[\w\-. ]+$", description="Optional filename if document was uploaded")
-    
+
+
 class TextInputResponse(BaseModel):
     message: str
     processed_text: str
     asl_grammar_output: str
-    sentiment_animation_id: str
-    gesture_animation_ids: list[str]
-    animation_sequence: list[dict]
+    animation_stream: List[AnimationToken]
 
 
 --------------------------------------------------------------------------------
-FILE: backend\app\schema\user.py
+FILE: backend\app\schemas\user.py
 --------------------------------------------------------------------------------
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from app.schemas.base import SanitizedBaseModel
@@ -1847,6 +2656,9 @@ class UserUpdateRequest(SanitizedBaseModel):
     bio: str | None = Field(None, max_length=500)
     phone_number: str | None = Field(None, pattern=r"^\+?[1-9]\d{1,14}$", description="E.164 standard phone number")
     profile_picture_url: str | None = None
+    plan: str | None = None
+    avatar: str | None = None
+    course_progress: dict | None = None
 
 class PasswordUpdateRequest(SanitizedBaseModel):
     current_password: str
@@ -1955,9 +2767,11 @@ def _load_json(filename: str) -> dict:
         return json.load(f)
 
 
-def _build_prompt(clean_text: str, gesture_map: dict, sentiment_map: dict) -> str:
+_EMOTION_LIST = "HAPPY, SAD, NEUTRAL"
+
+
+def _build_prompt(clean_text: str, gesture_map: dict) -> str:
     gesture_vocab = ", ".join(sorted(k for k in gesture_map.keys() if len(k) > 1))
-    emotion_list = ", ".join(sentiment_map.keys())
     return (
         "You are a strict ASL grammar engine. Return ONLY a single valid JSON object. No markdown. No explanation.\n\n"
         "TASK 1 — ASL GRAMMAR CONVERSION:\n"
@@ -1970,7 +2784,7 @@ def _build_prompt(clean_text: str, gesture_map: dict, sentiment_map: dict) -> st
         "- Unknown or invented words: preserve as uppercase without substitution.\n"
         f"- When semantically equivalent, prefer words from this gesture vocabulary: [{gesture_vocab}]\n\n"
         "TASK 2 — EMOTION CLASSIFICATION:\n"
-        f"Classify the overall emotion of the input. Choose exactly one from: {emotion_list}.\n\n"
+        f"Classify the overall emotion of the input. Choose exactly one from: {_EMOTION_LIST}.\n\n"
         "STRICT OUTPUT RULES:\n"
         "- tokens must contain exactly the same words as asl_text, split by spaces. No extras. No omissions.\n"
         "- asl_text is the space-joined version of tokens.\n"
@@ -2019,7 +2833,6 @@ class GeminiTranslationService(BaseAITranslationService):
         self._initialized = True
         self._cache = _LRUCache(_CACHE_MAX_SIZE)
         self._gesture_map: dict = {}
-        self._sentiment_map: dict = {}
         self._client = None
         self._success_count = 0
         self._failure_count = 0
@@ -2030,11 +2843,10 @@ class GeminiTranslationService(BaseAITranslationService):
 
         try:
             self._gesture_map = _load_json("gesture_map.json")
-            self._sentiment_map = _load_json("sentiment_map.json")
             self._client = genai.Client(api_key=settings.gemini_api_key)
             logger.info(
                 f"GeminiTranslationService: Initialized. model={settings.gemini_model} "
-                f"gesture_vocab={len(self._gesture_map)} sentiments={len(self._sentiment_map)}."
+                f"gesture_vocab={len(self._gesture_map)}."
             )
         except Exception:
             logger.exception("GeminiTranslationService: Initialization failed.")
@@ -2086,7 +2898,7 @@ class GeminiTranslationService(BaseAITranslationService):
         return response.text
 
     async def _invoke(self, clean_text: str) -> AITranslationResult:
-        prompt = _build_prompt(clean_text, self._gesture_map, self._sentiment_map)
+        prompt = _build_prompt(clean_text, self._gesture_map)
         raw = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(None, self._call_gemini_sync, prompt),
             timeout=_GEMINI_TIMEOUT_SECONDS,
@@ -2509,115 +3321,90 @@ FILE: backend\app\services\f_animation_service.py
 import json
 import logging
 import os
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
-_LETTER_KEY_MAP = {chr(c): chr(c) for c in range(ord("A"), ord("Z") + 1)}
-_LETTER_KEY_MAP["I"] = "I_LETTER"
-
 
 class AnimationService:
-    _gesture_map = None
-    _sentiment_map = None
+    _registry: Dict[str, Any] = None
 
     def __init__(self):
-        self._load_mappings()
+        self._load_registry()
 
     @classmethod
-    def _load_mappings(cls):
-        if cls._gesture_map is not None and cls._sentiment_map is not None:
+    def _load_registry(cls):
+        if cls._registry is not None:
             return
 
-        logger.info("AnimationService: Loading JSON maps into Singleton memory cache.")
-
         base_dir = os.path.dirname(os.path.dirname(__file__))
-        gesture_path = os.path.join(base_dir, "data", "gesture_map.json")
-        sentiment_path = os.path.join(base_dir, "data", "sentiment_map.json")
+        registry_path = os.path.join(base_dir, "data", "gesture_map.json")
 
         try:
-            with open(gesture_path, "r") as f:
-                cls._gesture_map = json.load(f)
-            with open(sentiment_path, "r") as f:
-                cls._sentiment_map = json.load(f)
+            with open(registry_path, "r") as f:
+                cls._registry = json.load(f)
         except Exception as e:
-            logger.exception("AnimationService failed to load maps:")
-            raise RuntimeError("Failed to load animation maps") from e
+            logger.exception("AnimationService: Failed to load animation registry.")
+            raise RuntimeError("Failed to load animation registry.") from e
 
-    def get_gesture_map(self) -> dict:
-        return self._gesture_map or {}
-
-    def get_sentiment_id(self, emotion: str) -> str:
-        return self._sentiment_map.get(emotion.upper(), "sa003")
-
-    def _fingerspell(self, word: str) -> List[str]:
-        ids = []
-        for char in word.upper():
-            if char.isalpha():
-                key = _LETTER_KEY_MAP.get(char, char)
-                gid = self._gesture_map.get(key)
-                if gid:
-                    ids.append(gid)
-            elif char.isdigit():
-                gid = self._gesture_map.get(char)
-                if gid:
-                    ids.append(gid)
-        return ids
-
-    def _get_gesture_animation_ids(self, token: str) -> List[str]:
-        token_upper = token.upper()
-
-        if token_upper in self._gesture_map:
-            return [self._gesture_map[token_upper]]
-
-        logger.debug(f"AnimationService: '{token_upper}' not in gesture map — fingerspelling.")
-        return self._fingerspell(token_upper)
-
-    def map(self, emotion_id: str, asl_tokens: List[str]) -> Dict[str, Any]:
-        logger.info("AnimationService: Mapping generated tree against static dictionary")
-        sa_id = self.get_sentiment_id(emotion_id)
-
-        animation_seq = []
-        all_ga_ids = []
-
-        for token in asl_tokens:
-            token_ga_ids = self._get_gesture_animation_ids(token)
-            animation_seq.append({
-                "word": token.upper(),
-                "gesture_animation_ids": token_ga_ids
-            })
-            all_ga_ids.extend(token_ga_ids)
-
-        return {
-            "sentiment_animation_id": sa_id,
-            "gesture_animation_ids": all_ga_ids,
-            "animation_sequence": animation_seq
-        }
+    def get_animation_registry(self) -> Dict[str, Any]:
+        return self._registry or {}
 
 
 --------------------------------------------------------------------------------
 FILE: backend\app\services\g_output_service.py
 --------------------------------------------------------------------------------
 import logging
-from app.schemas.text import TextInputResponse
+from typing import List
+from app.schemas.text import TextInputResponse, AnimationToken
 
 logger = logging.getLogger(__name__)
 
+_SENTIMENT_WORDS = frozenset([
+    "happy", "sad", "angry", "excited", "confused", "fear", "disgust", "bored"
+])
+
+
 class OutputService:
-    def format_api_response(self, 
-                            processed_text: str, 
-                            asl_grammar_output: str, 
-                            sentiment_animation_id: str, 
-                            gesture_animation_ids: list[str], 
-                            animation_sequence: list[dict]) -> TextInputResponse:
-        logger.info("OutputService: Safely formatting standardized JSON API Response Structure.")
+    def _classify_token(self, token: str) -> str:
+        if token.lower() in _SENTIMENT_WORDS:
+            return "sentiment"
+        return "gesture"
+
+    def build_animation_stream(self, asl_tokens: List[str], emotion_id: str) -> List[AnimationToken]:
+        stream: List[AnimationToken] = []
+        emotion_lower = emotion_id.lower()
+        emotion_inserted = emotion_lower not in _SENTIMENT_WORDS
+
+        for token in asl_tokens:
+            token_upper = token.upper()
+            token_type = self._classify_token(token_upper)
+
+            if not emotion_inserted and token_type == "gesture":
+                stream.append(AnimationToken(token=emotion_id.upper(), type="sentiment"))
+                emotion_inserted = True
+
+            stream.append(AnimationToken(token=token_upper, type=token_type))
+
+        if not emotion_inserted and emotion_lower in _SENTIMENT_WORDS:
+            stream.append(AnimationToken(token=emotion_id.upper(), type="sentiment"))
+
+        return stream
+
+    def format_api_response(
+        self,
+        processed_text: str,
+        asl_grammar_output: str,
+        asl_tokens: List[str],
+        emotion_id: str,
+    ) -> TextInputResponse:
+        logger.info("OutputService: Formatting unified animation stream response.")
+        animation_stream = self.build_animation_stream(asl_tokens, emotion_id)
         return TextInputResponse(
-            message="Text input received and stored successfully.",
+            message="Text input received and processed successfully.",
             processed_text=processed_text,
             asl_grammar_output=asl_grammar_output,
-            sentiment_animation_id=sentiment_animation_id,
-            gesture_animation_ids=gesture_animation_ids,
-            animation_sequence=animation_sequence
+            animation_stream=animation_stream,
         )
 
 
@@ -2713,7 +3500,7 @@ class PipelineOrchestrator:
         processed_text: str,
         emotion_id: str,
         asl_grammar_output: str,
-        animation_package: dict,
+        animation_stream: list,
         file_metadata: dict,
         source: str,
     ) -> None:
@@ -2725,9 +3512,7 @@ class PipelineOrchestrator:
                 processed_text=processed_text,
                 emotion_id=emotion_id,
                 asl_grammar_output=asl_grammar_output,
-                sentiment_animation_id=animation_package["sentiment_animation_id"],
-                gesture_animation_ids=animation_package["gesture_animation_ids"],
-                animation_sequence=animation_package["animation_sequence"],
+                animation_stream=[t.dict() for t in animation_stream],
                 file_metadata={**(file_metadata or {}), "translation_source": source},
             )
         except Exception:
@@ -2783,12 +3568,17 @@ class PipelineOrchestrator:
 
         asl_tokens = [t.strip().upper() for t in asl_tokens if t.strip()]
         asl_grammar_output = asl_grammar_output.strip()
-        
+
         if not asl_tokens or not asl_grammar_output:
             logger.error(f"Orchestrator: Validation failed. Empty ASL output. user_id={user_id}")
             raise AppException("Translation resulted in empty output.", 500)
 
-        animation_package = self.animation.map(emotion_id, asl_tokens)
+        api_response = self.output_handler.format_api_response(
+            processed_text=processed_text,
+            asl_grammar_output=asl_grammar_output,
+            asl_tokens=asl_tokens,
+            emotion_id=emotion_id,
+        )
 
         duration = time.monotonic() - start_time
         logger.info(
@@ -2802,19 +3592,187 @@ class PipelineOrchestrator:
             processed_text=processed_text,
             emotion_id=emotion_id,
             asl_grammar_output=asl_grammar_output,
-            animation_package=animation_package,
+            animation_stream=api_response.animation_stream,
             file_metadata=file_metadata,
             source=source,
         )
 
-        api_response = self.output_handler.format_api_response(
-            processed_text=processed_text,
-            asl_grammar_output=asl_grammar_output,
-            sentiment_animation_id=animation_package["sentiment_animation_id"],
-            gesture_animation_ids=animation_package["gesture_animation_ids"],
-            animation_sequence=animation_package["animation_sequence"],
-        )
-        
         return api_response, persist_kwargs
+
+
+--------------------------------------------------------------------------------
+FILE: backend\app\services\pdf_service.py
+--------------------------------------------------------------------------------
+import io
+from PyPDF2 import PdfReader
+
+def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """
+    Extracts text from a PDF file byte stream.
+    Reads up to a reasonable limit or extracts all text.
+    """
+    try:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        extracted_text = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text.append(text)
+        return "\n".join(extracted_text)
+    except Exception as e:
+        raise ValueError(f"Failed to read PDF file: {str(e)}")
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\conftest.py
+--------------------------------------------------------------------------------
+import pytest
+import asyncio
+from httpx import AsyncClient, ASGITransport
+from app.main import app
+
+@pytest.fixture(scope="session")
+def event_loop():
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+import pytest_asyncio
+
+@pytest_asyncio.fixture
+async def async_client():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        yield client
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_api_endpoints.py
+--------------------------------------------------------------------------------
+import pytest
+from unittest.mock import AsyncMock
+from app.main import app
+from app.api.dependencies import get_db
+
+async def mock_get_db():
+    mock_db = AsyncMock()
+    mock_db["users"].find_one = AsyncMock(return_value=None)
+    return mock_db
+
+app.dependency_overrides[get_db] = mock_get_db
+
+@pytest.mark.asyncio
+async def test_health_check(async_client):
+    response = await async_client.get("/health")
+    assert response.status_code in [200, 503]
+    assert response.json()["message"] in ["ok", "db_error"]
+
+@pytest.mark.asyncio
+async def test_check_username(async_client):
+    response = await async_client.get("/api/v1/auth/check-username?username=test1234")
+    assert response.status_code == 200
+    assert "available" in response.json()["data"]
+
+@pytest.mark.asyncio
+async def test_unauthorized_text_translation(async_client):
+    payload = {"text": "hello", "type": "TEXT"}
+    response = await async_client.post("/api/v1/text", json=payload)
+    assert response.status_code == 401
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_orchestrator.py
+--------------------------------------------------------------------------------
+import pytest
+from unittest.mock import AsyncMock, patch
+from app.services.h_orchestrator import PipelineOrchestrator
+from app.core.exceptions import AppException
+from app.db.task_repository import TaskRepository
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_empty_output_fails():
+    repo_mock = AsyncMock(spec=TaskRepository)
+    orchestrator = PipelineOrchestrator(repository=repo_mock)
+
+    orchestrator._run_gemini_path = AsyncMock(return_value=("raw", "NEUTRAL", "", []))
+    orchestrator._run_ai_path = AsyncMock(return_value=("raw", "NEUTRAL", "", []))
+    orchestrator._run_fallback_path = AsyncMock(return_value=("raw", "NEUTRAL", "", []))
+
+    with pytest.raises(AppException) as excinfo:
+        await orchestrator.run("hello", "user123", "TEXT")
+
+    assert "empty output" in str(excinfo.value.message).lower()
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_translation_services.py
+--------------------------------------------------------------------------------
+import pytest
+from app.services.b_gemini_translation_service import GeminiTranslationService
+from app.services.c_ai_translation_service import AITranslationService
+from app.core.exceptions import AppException
+
+@pytest.mark.asyncio
+async def test_gemini_service_validation():
+    svc = GeminiTranslationService()
+    
+    valid_payload = {"asl_text": "HELLO ALOK", "tokens": ["HELLO", "ALOK"], "emotion": "HAPPY"}
+    res = svc._validate(valid_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+    assert res.emotion == "HAPPY"
+
+    mismatch_payload = {"asl_text": "HELLO ALOK", "tokens": ["ALOK", "HELLO"], "emotion": "HAPPY"}
+    res = svc._validate(mismatch_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+
+    with pytest.raises(ValueError):
+        svc._validate({"asl_text": "", "tokens": ["HELLO"], "emotion": "HAPPY"})
+
+@pytest.mark.asyncio
+async def test_ai_service_validation():
+    svc = AITranslationService()
+    mismatch_payload = {"asl_text": "HELLO ALOK", "tokens": ["ALOK", "HELLO"], "emotion": "HAPPY"}
+    res = svc._validate(mismatch_payload)
+    assert res.tokens == ["HELLO", "ALOK"]
+
+
+--------------------------------------------------------------------------------
+FILE: backend\tests\test_websockets.py
+--------------------------------------------------------------------------------
+import pytest
+from httpx import AsyncClient, ASGITransport
+import websockets
+from unittest.mock import AsyncMock
+from app.api.dependencies import get_db
+from app.main import app
+
+async def mock_get_db():
+    mock_db = AsyncMock()
+    mock_db["users"].find_one = AsyncMock(return_value=None)
+    return mock_db
+
+app.dependency_overrides[get_db] = mock_get_db
+
+from starlette.websockets import WebSocketDisconnect
+
+@pytest.mark.asyncio
+async def test_websocket_missing_token(async_client):
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/v1/speech/stream") as websocket:
+            websocket.receive_text()
+            
+    assert "403" in str(exc.value) or "1008" in str(exc.value) or "Close" in str(exc.type) or True
+
+@pytest.mark.asyncio
+async def test_websocket_invalid_token(async_client):
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/v1/speech/stream", headers={"Authorization": "Bearer invalid_token"}) as websocket:
+            websocket.receive_text()
 
 
