@@ -1,94 +1,681 @@
 {
-  "ga001_i": { "file": "/animations/gestures/ga001_i.fbx", "tags": ["i", "me", "myself"] },
-  "ga002_you": { "file": "/animations/gestures/ga002_you.fbx", "tags": ["you", "your", "yourself"] },
-  "ga003_he": { "file": "/animations/gestures/ga003_he.fbx", "tags": ["he", "him", "his"] },
-  "ga004_she": { "file": "/animations/gestures/ga004_she.fbx", "tags": ["she", "her", "hers"] },
-  "ga005_we": { "file": "/animations/gestures/ga005_we.fbx", "tags": ["we", "us", "our"] },
-  "ga006_they": { "file": "/animations/gestures/ga006_they.fbx", "tags": ["they", "them", "their"] },
-  "ga007_who": { "file": "/animations/gestures/ga007_who.fbx", "tags": ["who"] },
-  "ga008_what": { "file": "/animations/gestures/ga008_what.fbx", "tags": ["what"] },
-  "ga009_where": { "file": "/animations/gestures/ga009_where.fbx", "tags": ["where"] },
-  "ga010_when": { "file": "/animations/gestures/ga010_when.fbx", "tags": ["when"] },
-  "ga011_why": { "file": "/animations/gestures/ga011_why.fbx", "tags": ["why"] },
-  "ga012_how": { "file": "/animations/gestures/ga012_how.fbx", "tags": ["how"] },
-  "ga013_which": { "file": "/animations/gestures/ga013_which.fbx", "tags": ["which"] },
-  "ga014_not": { "file": "/animations/gestures/ga014_not.fbx", "tags": ["not", "no", "never", "none", "nothing"] },
-  "ga019_yesterday": { "file": "/animations/gestures/ga019_yesterday.fbx", "tags": ["yesterday"] },
-  "ga020_today": { "file": "/animations/gestures/ga020_today.fbx", "tags": ["today"] },
-  "ga021_tomorrow": { "file": "/animations/gestures/ga021_tomorrow.fbx", "tags": ["tomorrow"] },
-  "ga022_now": { "file": "/animations/gestures/ga022_now.fbx", "tags": ["now"] },
-  "ga023_later": { "file": "/animations/gestures/ga023_later.fbx", "tags": ["later"] },
-  "ga024_morning": { "file": "/animations/gestures/ga024_morning.fbx", "tags": ["morning"] },
-  "ga025_afternoon": { "file": "/animations/gestures/ga025_afternoon.fbx", "tags": ["afternoon"] },
-  "ga026_evening": { "file": "/animations/gestures/ga026_evening.fbx", "tags": ["evening"] },
-  "ga027_night": { "file": "/animations/gestures/ga027_night.fbx", "tags": ["night"] },
-  "ga028_soon": { "file": "/animations/gestures/ga028_soon.fbx", "tags": ["soon"] },
-  "ga029_run": { "file": "/animations/gestures/ga029_run.fbx", "tags": ["run", "sprint", "jog"] },
-  "ga030_walk": { "file": "/animations/gestures/ga030_walk.fbx", "tags": ["walk", "go", "move", "travel"] },
-  "ga031_eat": { "file": "/animations/gestures/ga031_eat.fbx", "tags": ["eat", "food", "meal"] },
-  "ga032_drink": { "file": "/animations/gestures/ga032_drink.fbx", "tags": ["drink", "water", "thirsty"] },
-  "ga033_sleep": { "file": "/animations/gestures/ga033_sleep.fbx", "tags": ["sleep", "rest", "tired"] },
-  "ga034_work": { "file": "/animations/gestures/ga034_work.fbx", "tags": ["work", "job", "task"] },
-  "ga035_play": { "file": "/animations/gestures/ga035_play.fbx", "tags": ["play", "game", "fun", "clap", "clapping"] },
-  "ga036_help": { "file": "/animations/gestures/ga036_help.fbx", "tags": ["help", "assist", "support"] },
-  "ga037_fast": { "file": "/animations/gestures/ga037_fast.fbx", "tags": ["fast", "quick", "speed"] },
-  "ga038_slow": { "file": "/animations/gestures/ga038_slow.fbx", "tags": ["slow", "careful"] },
-  "ga039_good": { "file": "/animations/gestures/ga039_good.fbx", "tags": ["good", "great", "fine", "okay"] },
-  "ga040_bad": { "file": "/animations/gestures/ga040_bad.fbx", "tags": ["bad", "wrong", "terrible"] },
-  "ga041_beautiful": { "file": "/animations/gestures/ga041_beautiful.fbx", "tags": ["beautiful", "pretty", "lovely"] },
-  "ga045_feel": { "file": "/animations/gestures/ga045_feel.fbx", "tags": ["feel", "sense", "emotion"] },
-  "ga046_want": { "file": "/animations/gestures/ga046_want.fbx", "tags": ["want", "wish", "desire"] },
-  "ga047_need": { "file": "/animations/gestures/ga047_need.fbx", "tags": ["need", "require", "must"] },
-  "ga048_like": { "file": "/animations/gestures/ga048_like.fbx", "tags": ["like", "enjoy", "prefer"] },
-  "ga049_love": { "file": "/animations/gestures/ga049_love.fbx", "tags": ["love", "adore"] },
-  "ga050_know": { "file": "/animations/gestures/ga050_know.fbx", "tags": ["know", "knowledge"] },
-  "ga051_think": { "file": "/animations/gestures/ga051_think.fbx", "tags": ["think", "consider", "believe"] },
-  "ga052_see": { "file": "/animations/gestures/ga052_see.fbx", "tags": ["see", "look", "watch"] },
-  "ga053_hear": { "file": "/animations/gestures/ga053_hear.fbx", "tags": ["hear", "listen"] },
-  "ga054_understand": { "file": "/animations/gestures/ga054_understand.fbx", "tags": ["understand", "comprehend"] },
-  "ga055_come": { "file": "/animations/gestures/ga055_come.fbx", "tags": ["come", "arrive", "approach"] },
-  "ga056_go": { "file": "/animations/gestures/ga056_go.fbx", "tags": ["go", "leave", "depart"] },
-  "ga057_stop": { "file": "/animations/gestures/ga057_stop.fbx", "tags": ["stop", "halt", "end"] },
-  "ga058_start": { "file": "/animations/gestures/ga058_start.fbx", "tags": ["start", "begin", "initiate"] },
-  "ga059_finish": { "file": "/animations/gestures/ga059_finish.fbx", "tags": ["finish", "complete", "done"] },
-  "ga060_have": { "file": "/animations/gestures/ga060_have.fbx", "tags": ["have", "own", "possess"] },
-  "ga061_give": { "file": "/animations/gestures/ga061_give.fbx", "tags": ["give", "offer", "provide"] },
-  "ga062_take": { "file": "/animations/gestures/ga062_take.fbx", "tags": ["take", "grab", "get"] },
-  "ga063_make": { "file": "/animations/gestures/ga063_make.fbx", "tags": ["make", "create", "build"] },
-  "ga064_find": { "file": "/animations/gestures/ga064_find.fbx", "tags": ["find", "discover", "search"] },
-  "ga065_home": { "file": "/animations/gestures/ga065_home.fbx", "tags": ["home", "house"] },
-  "ga066_school": { "file": "/animations/gestures/ga066_school.fbx", "tags": ["school", "study", "learn"] },
-  "ga068_hospital": { "file": "/animations/gestures/ga068_hospital.fbx", "tags": ["hospital", "doctor", "sick"] },
-  "ga069_store": { "file": "/animations/gestures/ga069_store.fbx", "tags": ["store", "shop", "buy"] },
-  "ga075_please": { "file": "/animations/gestures/ga075_please.fbx", "tags": ["please"] },
-  "ga076_sorry": { "file": "/animations/gestures/ga076_sorry.fbx", "tags": ["sorry", "apologize"] },
-  "ga077_thank_you": { "file": "/animations/gestures/ga077_thank_you.fbx", "tags": ["thank", "thanks", "thank_you"] },
-  "ga078_yes": { "file": "/animations/gestures/ga078_yes.fbx", "tags": ["yes", "okay", "sure"] },
-  "ga079_hello": { "file": "/animations/gestures/ga079_hello.fbx", "tags": ["hello", "hi", "greet"] },
-  "ga080_goodbye": { "file": "/animations/gestures/ga080_goodbye.fbx", "tags": ["goodbye", "bye", "farewell"] },
-  "ga083_day": { "file": "/animations/gestures/ga083_day.fbx", "tags": ["day"] },
-  "ga084_week": { "file": "/animations/gestures/ga084_week.fbx", "tags": ["week"] },
-  "ga085_month": { "file": "/animations/gestures/ga085_month.fbx", "tags": ["month"] },
-  "ga086_year": { "file": "/animations/gestures/ga086_year.fbx", "tags": ["year"] },
-  "ga087_big": { "file": "/animations/gestures/ga087_big.fbx", "tags": ["big", "large", "huge"] },
-  "ga088_small": { "file": "/animations/gestures/ga088_small.fbx", "tags": ["small", "little", "tiny"] },
-  "ga089_more": { "file": "/animations/gestures/ga089_more.fbx", "tags": ["more", "additional"] },
-  "ga090_less": { "file": "/animations/gestures/ga090_less.fbx", "tags": ["less", "fewer"] },
-  "ga091_hot": { "file": "/animations/gestures/ga091_hot.fbx", "tags": ["hot", "warm"] },
-  "ga092_cold": { "file": "/animations/gestures/ga092_cold.fbx", "tags": ["cold", "cool"] },
-  "ga093_new": { "file": "/animations/gestures/ga093_new.fbx", "tags": ["new", "recent"] },
-  "ga094_old": { "file": "/animations/gestures/ga094_old.fbx", "tags": ["old", "aged"] },
-  "ga100_family": { "file": "/animations/gestures/ga100_family.fbx", "tags": ["family"] },
-  "ga101_friend": { "file": "/animations/gestures/ga101_friend.fbx", "tags": ["friend"] },
-  "ga102_mother": { "file": "/animations/gestures/ga102_mother.fbx", "tags": ["mother", "mom"] },
-  "ga103_father": { "file": "/animations/gestures/ga103_father.fbx", "tags": ["father", "dad"] },
-  "ga104_child": { "file": "/animations/gestures/ga104_child.fbx", "tags": ["child", "kid"] },
-  "sa001_happy": { "file": "/animations/sentiments/sa001_happy.fbx", "tags": ["happy", "joy", "excited", "glad"] },
-  "sa002_sad": { "file": "/animations/sentiments/sa002_sad.fbx", "tags": ["sad", "unhappy", "sorrow"] },
-  "sa003_angry": { "file": "/animations/sentiments/sa003_angry.fbx", "tags": ["angry", "mad", "rage"] },
-  "sa004_excited": { "file": "/animations/sentiments/sa004_excited.fbx", "tags": ["excited", "thrilled", "enthusiastic"] },
-  "sa005_confused": { "file": "/animations/sentiments/sa005_confused.fbx", "tags": ["confused", "unsure", "puzzled"] },
-  "sa006_fear": { "file": "/animations/sentiments/sa006_fear.fbx", "tags": ["fear", "scared", "afraid"] },
-  "sa007_disgust": { "file": "/animations/sentiments/sa007_disgust.fbx", "tags": ["disgust", "disgusted", "gross"] },
-  "sa008_bored": { "file": "/animations/sentiments/sa008_bored.fbx", "tags": ["bored", "boredom", "uninterested"] }
+  "ga001_i": {
+    "tags": [
+      "i",
+      "me",
+      "myself"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga001_i.fbx"
+  },
+  "ga002_you": {
+    "tags": [
+      "you",
+      "your",
+      "yourself"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga002_you.fbx"
+  },
+  "ga003_he": {
+    "tags": [
+      "he",
+      "him",
+      "his"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga003_he.fbx"
+  },
+  "ga004_she": {
+    "tags": [
+      "she",
+      "her",
+      "hers"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga004_she.fbx"
+  },
+  "ga005_we": {
+    "tags": [
+      "we",
+      "us",
+      "our"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga005_we.fbx"
+  },
+  "ga006_they": {
+    "tags": [
+      "they",
+      "them",
+      "their"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga006_they.fbx"
+  },
+  "ga007_who": {
+    "tags": [
+      "who"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga007_who.fbx"
+  },
+  "ga008_what": {
+    "tags": [
+      "what"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga008_what.fbx"
+  },
+  "ga009_where": {
+    "tags": [
+      "where"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga009_where.fbx"
+  },
+  "ga010_when": {
+    "tags": [
+      "when"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga010_when.fbx"
+  },
+  "ga011_why": {
+    "tags": [
+      "why"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga011_why.fbx"
+  },
+  "ga012_how": {
+    "tags": [
+      "how"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga012_how.fbx"
+  },
+  "ga013_which": {
+    "tags": [
+      "which"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga013_which.fbx"
+  },
+  "ga014_not": {
+    "tags": [
+      "not",
+      "no",
+      "never",
+      "none",
+      "nothing"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga014_not.fbx"
+  },
+  "ga019_yesterday": {
+    "tags": [
+      "yesterday"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga019_yesterday.fbx"
+  },
+  "ga020_today": {
+    "tags": [
+      "today"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga020_today.fbx"
+  },
+  "ga021_tomorrow": {
+    "tags": [
+      "tomorrow"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga021_tomorrow.fbx"
+  },
+  "ga022_now": {
+    "tags": [
+      "now"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga022_now.fbx"
+  },
+  "ga023_later": {
+    "tags": [
+      "later"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga023_later.fbx"
+  },
+  "ga024_morning": {
+    "tags": [
+      "morning"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga024_morning.fbx"
+  },
+  "ga025_afternoon": {
+    "tags": [
+      "afternoon"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga025_afternoon.fbx"
+  },
+  "ga026_evening": {
+    "tags": [
+      "evening"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga026_evening.fbx"
+  },
+  "ga027_night": {
+    "tags": [
+      "night"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga027_night.fbx"
+  },
+  "ga028_soon": {
+    "tags": [
+      "soon"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga028_soon.fbx"
+  },
+  "ga029_run": {
+    "tags": [
+      "run",
+      "sprint",
+      "jog"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga029_run.fbx"
+  },
+  "ga030_walk": {
+    "tags": [
+      "walk",
+      "go",
+      "move",
+      "travel"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga030_walk.fbx"
+  },
+  "ga031_eat": {
+    "tags": [
+      "eat",
+      "food",
+      "meal"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga031_eat.fbx"
+  },
+  "ga032_drink": {
+    "tags": [
+      "drink",
+      "water",
+      "thirsty"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga032_drink.fbx"
+  },
+  "ga033_sleep": {
+    "tags": [
+      "sleep",
+      "rest",
+      "tired"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga033_sleep.fbx"
+  },
+  "ga034_work": {
+    "tags": [
+      "work",
+      "job",
+      "task"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga034_work.fbx"
+  },
+  "ga035_play": {
+    "tags": [
+      "play",
+      "game",
+      "fun",
+      "clap",
+      "clapping"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga035_play.fbx"
+  },
+  "ga036_help": {
+    "tags": [
+      "help",
+      "assist",
+      "support"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga036_help.fbx"
+  },
+  "ga037_fast": {
+    "tags": [
+      "fast",
+      "quick",
+      "speed"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga037_fast.fbx"
+  },
+  "ga038_slow": {
+    "tags": [
+      "slow",
+      "careful"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga038_slow.fbx"
+  },
+  "ga039_good": {
+    "tags": [
+      "good",
+      "great",
+      "fine",
+      "okay"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga039_good.fbx"
+  },
+  "ga040_bad": {
+    "tags": [
+      "bad",
+      "wrong",
+      "terrible"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga040_bad.fbx"
+  },
+  "ga041_beautiful": {
+    "tags": [
+      "beautiful",
+      "pretty",
+      "lovely"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga041_beautiful.fbx"
+  },
+  "ga045_feel": {
+    "tags": [
+      "feel",
+      "sense",
+      "emotion"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga045_feel.fbx"
+  },
+  "ga046_want": {
+    "tags": [
+      "want",
+      "wish",
+      "desire"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga046_want.fbx"
+  },
+  "ga047_need": {
+    "tags": [
+      "need",
+      "require",
+      "must"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga047_need.fbx"
+  },
+  "ga048_like": {
+    "tags": [
+      "like",
+      "enjoy",
+      "prefer"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga048_like.fbx"
+  },
+  "ga049_love": {
+    "tags": [
+      "love",
+      "adore"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga049_love.fbx"
+  },
+  "ga050_know": {
+    "tags": [
+      "know",
+      "knowledge"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga050_know.fbx"
+  },
+  "ga051_think": {
+    "tags": [
+      "think",
+      "consider",
+      "believe"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga051_think.fbx"
+  },
+  "ga052_see": {
+    "tags": [
+      "see",
+      "look",
+      "watch"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga052_see.fbx"
+  },
+  "ga053_hear": {
+    "tags": [
+      "hear",
+      "listen"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga053_hear.fbx"
+  },
+  "ga054_understand": {
+    "tags": [
+      "understand",
+      "comprehend"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga054_understand.fbx"
+  },
+  "ga055_come": {
+    "tags": [
+      "come",
+      "arrive",
+      "approach"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga055_come.fbx"
+  },
+  "ga056_go": {
+    "tags": [
+      "go",
+      "leave",
+      "depart"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga056_go.fbx"
+  },
+  "ga057_stop": {
+    "tags": [
+      "stop",
+      "halt",
+      "end"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga057_stop.fbx"
+  },
+  "ga058_start": {
+    "tags": [
+      "start",
+      "begin",
+      "initiate"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga058_start.fbx"
+  },
+  "ga059_finish": {
+    "tags": [
+      "finish",
+      "complete",
+      "done"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga059_finish.fbx"
+  },
+  "ga060_have": {
+    "tags": [
+      "have",
+      "own",
+      "possess"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga060_have.fbx"
+  },
+  "ga061_give": {
+    "tags": [
+      "give",
+      "offer",
+      "provide"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga061_give.fbx"
+  },
+  "ga062_take": {
+    "tags": [
+      "take",
+      "grab",
+      "get"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga062_take.fbx"
+  },
+  "ga063_make": {
+    "tags": [
+      "make",
+      "create",
+      "build"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga063_make.fbx"
+  },
+  "ga064_find": {
+    "tags": [
+      "find",
+      "discover",
+      "search"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga064_find.fbx"
+  },
+  "ga065_home": {
+    "tags": [
+      "home",
+      "house"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga065_home.fbx"
+  },
+  "ga066_school": {
+    "tags": [
+      "school",
+      "study",
+      "learn"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga066_school.fbx"
+  },
+  "ga068_hospital": {
+    "tags": [
+      "hospital",
+      "doctor",
+      "sick"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga068_hospital.fbx"
+  },
+  "ga069_store": {
+    "tags": [
+      "store",
+      "shop",
+      "buy"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga069_store.fbx"
+  },
+  "ga075_please": {
+    "tags": [
+      "please"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga075_please.fbx"
+  },
+  "ga076_sorry": {
+    "tags": [
+      "sorry",
+      "apologize"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga076_sorry.fbx"
+  },
+  "ga077_thank_you": {
+    "tags": [
+      "thank",
+      "thanks",
+      "thank_you"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga077_thank_you.fbx"
+  },
+  "ga078_yes": {
+    "tags": [
+      "yes",
+      "okay",
+      "sure"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga078_yes.fbx"
+  },
+  "ga079_hello": {
+    "tags": [
+      "hello",
+      "hi",
+      "greet"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga079_hello.fbx"
+  },
+  "ga080_goodbye": {
+    "tags": [
+      "goodbye",
+      "bye",
+      "farewell"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga080_goodbye.fbx"
+  },
+  "ga083_day": {
+    "tags": [
+      "day"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga083_day.fbx"
+  },
+  "ga084_week": {
+    "tags": [
+      "week"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga084_week.fbx"
+  },
+  "ga085_month": {
+    "tags": [
+      "month"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga085_month.fbx"
+  },
+  "ga086_year": {
+    "tags": [
+      "year"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga086_year.fbx"
+  },
+  "ga087_big": {
+    "tags": [
+      "big",
+      "large",
+      "huge"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga087_big.fbx"
+  },
+  "ga088_small": {
+    "tags": [
+      "small",
+      "little",
+      "tiny"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga088_small.fbx"
+  },
+  "ga089_more": {
+    "tags": [
+      "more",
+      "additional"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga089_more.fbx"
+  },
+  "ga090_less": {
+    "tags": [
+      "less",
+      "fewer"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga090_less.fbx"
+  },
+  "ga091_hot": {
+    "tags": [
+      "hot",
+      "warm"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga091_hot.fbx"
+  },
+  "ga092_cold": {
+    "tags": [
+      "cold",
+      "cool"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga092_cold.fbx"
+  },
+  "ga093_new": {
+    "tags": [
+      "new",
+      "recent"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga093_new.fbx"
+  },
+  "ga094_old": {
+    "tags": [
+      "old",
+      "aged"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga094_old.fbx"
+  },
+  "ga100_family": {
+    "tags": [
+      "family"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga100_family.fbx"
+  },
+  "ga101_friend": {
+    "tags": [
+      "friend"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga101_friend.fbx"
+  },
+  "ga102_mother": {
+    "tags": [
+      "mother",
+      "mom"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga102_mother.fbx"
+  },
+  "ga103_father": {
+    "tags": [
+      "father",
+      "dad"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga103_father.fbx"
+  },
+  "ga104_child": {
+    "tags": [
+      "child",
+      "kid"
+    ],
+    "file_template": "/animations/gestures/{avatar}/{avatar}_ga104_child.fbx"
+  },
+  "sa001_happy": {
+    "tags": [
+      "happy",
+      "joy",
+      "excited",
+      "glad"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa001_happy.fbx"
+  },
+  "sa002_sad": {
+    "tags": [
+      "sad",
+      "unhappy",
+      "sorrow"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa002_sad.fbx"
+  },
+  "sa003_angry": {
+    "tags": [
+      "angry",
+      "mad",
+      "rage"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa003_angry.fbx"
+  },
+  "sa004_excited": {
+    "tags": [
+      "excited",
+      "thrilled",
+      "enthusiastic"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa004_excited.fbx"
+  },
+  "sa005_confused": {
+    "tags": [
+      "confused",
+      "unsure",
+      "puzzled"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa005_confused.fbx"
+  },
+  "sa006_fear": {
+    "tags": [
+      "fear",
+      "scared",
+      "afraid"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa006_fear.fbx"
+  },
+  "sa007_disgust": {
+    "tags": [
+      "disgust",
+      "disgusted",
+      "gross"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa007_disgust.fbx"
+  },
+  "sa008_bored": {
+    "tags": [
+      "bored",
+      "boredom",
+      "uninterested"
+    ],
+    "file_template": "/animations/sentiments/{avatar}/{avatar}_sa008_bored.fbx"
+  }
 }

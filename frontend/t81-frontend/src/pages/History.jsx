@@ -107,7 +107,7 @@ export function History() {
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
-                                                        onClick={() => navigate("/translate")}
+                                                        onClick={() => navigate("/translate", { state: { text: item.text, asl: item.asl, stream: item.animation_stream } })}
                                                         className="group-hover:border-[var(--primary)] group-hover:text-[var(--primary)] transition-colors"
                                                     >
                                                         <Play size={14} className="mr-2" />

@@ -5,7 +5,7 @@ def success_response(message: str, data: Optional[Any] = None, status_code: int 
     return {
         "success": True,
         "message": message,
-        "data": data or {},
+        "data": data if data is not None else {},
         "errors": []
     }
 

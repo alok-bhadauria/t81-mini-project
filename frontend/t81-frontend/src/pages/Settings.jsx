@@ -1,15 +1,51 @@
 import { Card } from "../components/common/Card";
-import { Palette, Volume2, User } from "lucide-react";
+import { Palette, Volume2, User, Mic, PlayCircle, Users, Loader2, Check } from "lucide-react";
+import { useState, useEffect } from "react";
+import { api } from "../services/api";
+import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { useSound } from "../context/SoundContext";
 import { useToast } from "../context/ToastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { AvatarRenderer } from "../components/common/AvatarRenderer";
 
 export function Settings() {
     useDocumentTitle("Settings");
     const { theme, toggleTheme } = useTheme();
-    const { isSoundEnabled, toggleSound } = useSound();
+    const { isSoundEnabled, toggleSound, soundModel, setSoundModel, availableVoices, speak } = useSound();
     const { addToast } = useToast();
+    const { user, updateUserState, isLoggedIn } = useAuth();
+    
+    const [avatars, setAvatars] = useState([]);
+    const [isLoadingAvatars, setIsLoadingAvatars] = useState(true);
+
+    useEffect(() => {
+        api.get("/avatars")
+            .then(data => {
+                setAvatars(data.characters || []);
+                setIsLoadingAvatars(false);
+            })
+            .catch(err => {
+                console.error("Failed to load avatars:", err);
+                setIsLoadingAvatars(false);
+            });
+    }, []);
+
+    const handleAvatarSelect = async (avatarName) => {
+        if (!isLoggedIn) {
+            addToast({ title: "Login Required", description: "You must be logged in to save preferences.", type: "error" });
+            return;
+        }
+        if (user?.avatar === avatarName) return;
+
+        try {
+            await api.put("/auth/me", { avatar: avatarName });
+            updateUserState({ avatar: avatarName });
+            addToast({ title: "Avatar Updated", description: `Your default character is now ${avatarName}.`, type: "success" });
+        } catch (error) {
+            addToast({ title: "Update Failed", description: error.message || "Failed to save avatar preference.", type: "error" });
+        }
+    };
 
     const handleSoundToggle = () => {
         toggleSound();
@@ -81,24 +117,107 @@ export function Settings() {
 
                 <Card className="p-6 hover:border-[var(--primary)]/50 transition-colors md:col-span-2">
                     <div className="space-y-4">
-                        <div className="flex items-center gap-3 mb-2">
-                            <div className="p-2 rounded-lg bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                                <User size={24} />
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 rounded-lg bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400">
+                                <Mic size={24} />
                             </div>
                             <div>
-                                <h3 className="font-semibold text-lg">Avatar Customization</h3>
-                                <p className="text-sm text-[var(--text-secondary)]">Personalize your ASL interpreter</p>
+                                <h3 className="font-semibold text-lg">Voice Model</h3>
+                                <p className="text-sm text-[var(--text-secondary)]">Select the voice used for pronunciation</p>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {availableVoices.length === 0 ? (
+                                <p className="text-sm text-[var(--text-secondary)]">No voice models available on this device.</p>
+                            ) : (
+                                availableVoices.map((voice, idx) => (
+                                    <div 
+                                        key={voice.uri} 
+                                        onClick={() => setSoundModel(voice.uri)}
+                                        className={`flex items-center justify-between p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                                            soundModel === voice.uri 
+                                                ? 'border-[var(--primary)] bg-[var(--primary)]/5' 
+                                                : 'border-[var(--border-color)] bg-[var(--bg-background)] hover:border-[var(--primary)]/50'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                                soundModel === voice.uri ? 'border-[var(--primary)]' : 'border-zinc-400'
+                                            }`}>
+                                                {soundModel === voice.uri && <div className="w-2 h-2 rounded-full bg-[var(--primary)]" />}
+                                            </div>
+                                            <div>
+                                                <p className="font-semibold text-[var(--text-primary)]">Voice {idx + 1}</p>
+                                                <p className="text-xs text-[var(--text-secondary)] break-words max-w-[200px]">{voice.name}</p>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                const originalModel = soundModel;
+                                                setSoundModel(voice.uri);
+                                                speak("Hello, this is a test of the voice model.", voice.uri);
+                                            }}
+                                            className="p-2 text-[var(--text-secondary)] hover:text-[var(--primary)] transition-colors"
+                                            title="Preview Voice"
+                                        >
+                                            <PlayCircle size={20} />
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </Card>
+
+                <Card className="p-6 hover:border-[var(--primary)]/50 transition-colors md:col-span-2">
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+                                <Users size={24} />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold text-lg">Avatar Preference</h3>
+                                <p className="text-sm text-[var(--text-secondary)]">Select your default 3D character for ASL translations.</p>
                             </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            {[1, 2, 3, 4].map((i) => (
-                                <div key={i} className="aspect-square rounded-xl bg-[var(--bg-background)] border-2 border-[var(--border-color)] hover:border-[var(--primary)] cursor-pointer flex items-center justify-center group overflow-hidden relative">
-                                    <div className="absolute inset-x-0 bottom-0 top-1/2 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end justify-center p-2">
-                                        <span className="text-white text-xs font-bold">Select</span>
-                                    </div>
-                                    <User size={40} className="text-[var(--text-secondary)]" />
+                            {isLoadingAvatars ? (
+                                <div className="col-span-full flex justify-center py-4">
+                                    <Loader2 size={24} className="animate-spin text-[var(--primary)] opacity-50" />
                                 </div>
-                            ))}
+                            ) : avatars.length === 0 ? (
+                                <p className="text-sm text-[var(--text-secondary)] col-span-full">No avatars found.</p>
+                            ) : (
+                                avatars.map((avatar) => {
+                                    const isSelected = (user?.avatar || "AJ") === avatar;
+                                    return (
+                                        <div 
+                                            key={avatar} 
+                                            onClick={() => handleAvatarSelect(avatar)}
+                                            className={`relative aspect-square rounded-xl bg-[var(--bg-background)] border-2 cursor-pointer flex flex-col items-center justify-center transition-all hover:-translate-y-1 overflow-hidden group ${
+                                                isSelected 
+                                                    ? 'border-[var(--primary)] shadow-lg shadow-orange-500/20' 
+                                                    : 'border-[var(--border-color)] hover:border-[var(--primary)]/50'
+                                            }`}
+                                        >
+                                            <div className="absolute inset-0 z-0 bg-zinc-100 dark:bg-zinc-800 pointer-events-none">
+                                                <AvatarRenderer playing={false} avatarName={avatar} />
+                                            </div>
+                                            
+                                            <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-3 flex justify-center pointer-events-none">
+                                                <span className={`text-sm font-bold tracking-wide ${isSelected ? 'text-[var(--primary)]' : 'text-white/90 group-hover:text-white'}`}>{avatar}</span>
+                                            </div>
+                                            
+                                            {isSelected && (
+                                                <div className="absolute top-2 right-2 z-10 bg-[var(--primary)] text-white w-6 h-6 rounded-full flex items-center justify-center shadow-md">
+                                                    <Check size={14} strokeWidth={3} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            )}
                         </div>
                     </div>
                 </Card>

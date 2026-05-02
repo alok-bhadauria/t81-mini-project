@@ -31,7 +31,8 @@ async def get_history(
             "id": str(item["_id"]),
             "text": item.get("input_text", ""),
             "asl": item.get("asl_grammar_output", ""),
-            "date": item.get("created_at").isoformat() if item.get("created_at") else ""
+            "date": item.get("created_at").isoformat() if item.get("created_at") else "",
+            "animation_stream": item.get("animation_stream", [])
         })
     return success_response("History fetched successfully", data=results)
 

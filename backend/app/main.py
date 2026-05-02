@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from app.db.mongodb import connect_to_mongo, close_mongo_connection, get_database
 from app.core.config import settings
 import cloudinary
-from app.api.routes import text, auth, history, uploads, feedback, speech, admin
+from app.api.routes import text, auth, history, uploads, feedback, speech, admin, avatars, courses
 from app.core.exceptions import AppException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -158,6 +158,8 @@ app.include_router(uploads.router)
 app.include_router(feedback.router)
 app.include_router(speech.router)
 app.include_router(admin.router)
+app.include_router(avatars.router)
+app.include_router(courses.router)
 
 from app.core.responses import success_response, error_response
 

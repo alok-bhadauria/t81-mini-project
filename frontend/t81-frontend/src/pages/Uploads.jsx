@@ -10,35 +10,74 @@ import { api } from "../services/api";
 
 export function Uploads() {
     useDocumentTitle("Uploads");
-    const { isLoggedIn } = useAuth();
+    const { isLoggedIn, user } = useAuth();
     const { addToast } = useToast();
     const navigate = useNavigate();
 
     const [viewFileModal, setViewFileModal] = useState(null);
     const [uploadList, setUploadList] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef(null);
     const toastRef = useRef(addToast);
+
+    const fetchUploads = async () => {
+        try {
+            const data = await api.get("/uploads");
+            const formattedData = data.map((item) => ({
+                ...item,
+                date: item.date
+                    ? new Date(item.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+                    : "Unknown Date",
+            }));
+            setUploadList(formattedData);
+        } catch (error) {
+            toastRef.current({ title: "Failed to load uploads", description: error.message, type: "error" });
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (!isLoggedIn) return;
-        const fetchUploads = async () => {
-            try {
-                const data = await api.get("/uploads");
-                const formattedData = data.map((item) => ({
-                    ...item,
-                    date: item.date
-                        ? new Date(item.date).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
-                        : "Unknown Date",
-                }));
-                setUploadList(formattedData);
-            } catch (error) {
-                toastRef.current({ title: "Failed to load uploads", description: error.message, type: "error" });
-            } finally {
-                setIsLoading(false);
-            }
-        };
         fetchUploads();
     }, [isLoggedIn]);
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const planLimits = { free: 5, basic: 50, premium: 500, enterprise: 'Unlimited' };
+        const currentPlan = user?.plan || 'free';
+        const limit = planLimits[currentPlan] || 5;
+
+        if (limit !== 'Unlimited' && uploadList.length >= limit) {
+            addToast({ title: "Storage Limit Reached", description: `Please upgrade your plan to upload more than ${limit} documents.`, type: "error" });
+            if (fileInputRef.current) fileInputRef.current.value = null;
+            return;
+        }
+
+        const lowerName = file.name.toLowerCase();
+        if (!lowerName.endsWith(".txt") && !lowerName.endsWith(".pdf")) {
+            addToast({ title: "Unsupported File", description: "Only .txt and .pdf files are supported.", type: "error" });
+            return;
+        }
+
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            await api.postMultipart("/uploads", formData);
+            addToast({ title: "Document processed", description: "Successfully uploaded and translated " + file.name, type: "success" });
+            fetchUploads(); // Refresh the list
+        } catch (error) {
+            addToast({ title: "Upload Failed", description: error.message || "Failed to upload document", type: "error" });
+        } finally {
+            setIsUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = null;
+        }
+    };
 
     const handleDelete = async (e, id) => {
         e.stopPropagation();
@@ -59,17 +98,58 @@ export function Uploads() {
                     <p className="text-[var(--text-secondary)]">Manage your saved documents.</p>
                 </div>
                 {isLoggedIn && !isLoading && (
-                    <div className="text-right">
-                        <div className="text-sm font-semibold text-[var(--text-primary)]">Storage Usage</div>
-                        <div className="text-xs text-[var(--text-secondary)]">
-                            {uploadList.length} / 5 Free Uploads
+                    <div className="flex items-center gap-6">
+                        <div className="text-right hidden sm:block">
+                            <div className="text-sm font-semibold text-[var(--text-primary)]">Storage Usage</div>
+                            <div className="text-xs text-[var(--text-secondary)]">
+                                {(() => {
+                                    const planLimits = {
+                                        free: 5,
+                                        basic: 50,
+                                        premium: 500,
+                                        enterprise: 'Unlimited'
+                                    };
+                                    const currentPlan = user?.plan || 'free';
+                                    const limit = planLimits[currentPlan] || 5;
+                                    
+                                    return limit === 'Unlimited' 
+                                        ? `${uploadList.length} Uploads (Unlimited)` 
+                                        : `${uploadList.length} / ${limit} Uploads`;
+                                })()}
+                            </div>
+                            <div className="w-32 h-2 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-1 overflow-hidden">
+                                {(() => {
+                                    const planLimits = { free: 5, basic: 50, premium: 500, enterprise: 'Unlimited' };
+                                    const currentPlan = user?.plan || 'free';
+                                    const limit = planLimits[currentPlan] || 5;
+                                    const percentage = limit === 'Unlimited' ? 0 : Math.min((uploadList.length / limit) * 100, 100);
+                                    
+                                    return (
+                                        <div
+                                            className={`h-full rounded-full transition-all duration-500 ${limit !== 'Unlimited' && uploadList.length >= limit ? "bg-red-500" : "bg-[var(--primary)]"}`}
+                                            style={{ width: limit === 'Unlimited' ? '100%' : `${percentage}%` }}
+                                        ></div>
+                                    );
+                                })()}
+                            </div>
                         </div>
-                        <div className="w-32 h-2 bg-zinc-200 dark:bg-zinc-800 rounded-full mt-1 overflow-hidden">
-                            <div
-                                className={`h-full rounded-full transition-all duration-500 ${uploadList.length >= 5 ? "bg-red-500" : "bg-[var(--primary)]"}`}
-                                style={{ width: `${Math.min((uploadList.length / 5) * 100, 100)}%` }}
-                            ></div>
-                        </div>
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            onChange={handleFileUpload}
+                            className="hidden"
+                            accept=".txt,.pdf"
+                        />
+                        <Button 
+                            onClick={() => fileInputRef.current?.click()} 
+                            disabled={isUploading || (() => {
+                                const limits = { free: 5, basic: 50, premium: 500, enterprise: 'Unlimited' };
+                                const lim = limits[user?.plan || 'free'] || 5;
+                                return lim !== 'Unlimited' && uploadList.length >= lim;
+                            })()}
+                        >
+                            {isUploading ? "Uploading..." : "Upload Document"}
+                        </Button>
                     </div>
                 )}
             </div>
@@ -108,13 +188,13 @@ export function Uploads() {
                                 </div>
 
                                 <div className="grid grid-cols-3 border-t border-[var(--border-color)] bg-[var(--bg-background)]/50 divide-x divide-[var(--border-color)]">
-                                    <button onClick={() => setViewFileModal({ id: item.id, name: item.name, content: item.description })} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#3b82f6] text-[var(--text-secondary)] transition-colors" title="View File">
+                                    <button onClick={() => setViewFileModal({ id: item.id, name: item.name, content: item.text || item.description })} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#3b82f6] text-[var(--text-secondary)] transition-colors" title="View File">
                                         <Eye size={16} />
                                         <span className="text-[10px] uppercase font-bold tracking-wider">View</span>
                                     </button>
-                                    <button onClick={() => navigate("/translate")} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#10b981] text-[var(--text-secondary)] transition-colors" title="Animate File">
+                                    <button onClick={() => navigate("/translate", { state: { text: item.text, asl: item.asl, stream: item.animation_stream } })} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-[#10b981] text-[var(--text-secondary)] transition-colors" title="See Animation">
                                         <Play size={16} />
-                                        <span className="text-[10px] uppercase font-bold tracking-wider">Animate</span>
+                                        <span className="text-[10px] uppercase font-bold tracking-wider">See Animation</span>
                                     </button>
                                     <button onClick={(e) => handleDelete(e, item.id)} className="flex flex-col items-center justify-center py-3 gap-1 hover:bg-[var(--bg-surface)] hover:text-red-500 text-[var(--text-secondary)] transition-colors" title="Delete File">
                                         <Trash2 size={16} />

@@ -18,6 +18,7 @@ export const AuthProvider = ({ children }) => {
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [jwt, setJwt] = useState(null);
     const [user, setUser] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
 
     const logout = useCallback(() => {
         localStorage.removeItem("sf_jwt");
@@ -44,7 +45,9 @@ export const AuthProvider = ({ children }) => {
             setJwt(storedToken);
             setIsLoggedIn(true);
             setUser({ email: "Loading...", full_name: "Loading..." });
-            fetchUserProfile();
+            fetchUserProfile().finally(() => setIsLoading(false));
+        } else {
+            setIsLoading(false);
         }
     }, [fetchUserProfile]);
 
@@ -84,7 +87,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ isLoggedIn, user, jwt, login, register, googleLogin, logout, updateUserState }}>
+        <AuthContext.Provider value={{ isLoggedIn, isLoading, user, jwt, login, register, googleLogin, logout, updateUserState }}>
             {children}
         </AuthContext.Provider>
     );

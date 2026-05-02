@@ -76,9 +76,10 @@ class UsernameCheckResponse(BaseModel):
 @limiter.limit("30/minute")
 async def check_username(
     request: Request,
-    username: Annotated[str, Depends(sanitize_query)],
+    username: str,
     db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
+    username = sanitize_query(username)
     if not username or len(username) < 3 or len(username) > 30:
         return success_response("Username check", data={"available": False})
 
@@ -210,7 +211,7 @@ async def google_auth(
     return success_response("Google authentication successful", data={"access_token": access_token, "token_type": "bearer", "is_new_user": is_new_user})
 
 
-@router.get("/me", summary="Get Current User Profile", description="Retrieves the profile information of the currently authenticated user.", response_model=UserResponse)
+@router.get("/me", summary="Get Current User Profile", description="Retrieves the profile information of the currently authenticated user.")
 @limiter.limit("30/minute")
 async def get_my_profile(
     request: Request,
@@ -329,7 +330,7 @@ async def upload_avatar(
         raise HTTPException(status_code=404, detail="User not found")
 
     updated_user = UserDBModel(**result)
-    return UserResponse(
+    data = UserResponse(
         id=str(updated_user.id),
         email=updated_user.email,
         full_name=updated_user.full_name,
@@ -341,6 +342,7 @@ async def upload_avatar(
         plan=updated_user.plan,
         created_at=updated_user.created_at
     )
+    return success_response("Avatar uploaded successfully", data=data.model_dump())
 
 
 @router.put("/password", summary="Change Password", description="Updates the password for a local user account. Requires CSRF token.")

@@ -8,6 +8,8 @@ import { History } from "./pages/History";
 import { Support } from "./pages/Support";
 import { Profile } from "./pages/Profile";
 import { Login } from "./pages/Login";
+import { Plans } from "./pages/Plans";
+import { Learn } from "./pages/Learn";
 import { ProtectedRoute } from "./components/common/ProtectedRoute";
 
 const router = createBrowserRouter([
@@ -21,8 +23,16 @@ const router = createBrowserRouter([
                 element: <ProtectedRoute><Translate /></ProtectedRoute>,
             },
             {
+                path: "learn",
+                element: <ProtectedRoute><Learn /></ProtectedRoute>,
+            },
+            {
                 path: "settings",
                 element: <ProtectedRoute><Settings /></ProtectedRoute>,
+            },
+            {
+                path: "plans",
+                element: <ProtectedRoute><Plans /></ProtectedRoute>,
             },
             {
                 path: "uploads",

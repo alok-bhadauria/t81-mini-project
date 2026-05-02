@@ -43,6 +43,9 @@ class UserUpdateRequest(SanitizedBaseModel):
     bio: str | None = Field(None, max_length=500)
     phone_number: str | None = Field(None, pattern=r"^\+?[1-9]\d{1,14}$", description="E.164 standard phone number")
     profile_picture_url: str | None = None
+    plan: str | None = None
+    avatar: str | None = None
+    course_progress: dict | None = None
 
 class PasswordUpdateRequest(SanitizedBaseModel):
     current_password: str

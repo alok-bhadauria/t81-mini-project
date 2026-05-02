@@ -1,21 +1,25 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Card } from "../components/common/Card";
 import { Button } from "../components/common/Button";
-import { Keyboard, Mic, FileText, Send, Loader2, Volume2, Play, Square, Settings, Upload, X, Check } from "lucide-react";
+import { Keyboard, Mic, FileText, Send, Loader2, Volume2, VolumeX, Play, Square, Settings, Upload, X, Check } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { useSound } from "../context/SoundContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useAnimationRegistry, resolveTokenToFile } from "../hooks/useAnimationRegistry";
 import { AvatarRenderer } from "../components/common/AvatarRenderer";
 import { api } from "../services/api";
+import { useLocation } from "react-router-dom";
 
 const ANIMATION_DURATION_MS = 2500;
 
 export function Translate() {
     useDocumentTitle("App");
-    const { isLoggedIn } = useAuth();
+    const { isLoggedIn, user } = useAuth();
     const { addToast } = useToast();
+    const { isSoundEnabled, toggleSound, speak } = useSound();
     const { registry } = useAnimationRegistry();
+    const location = useLocation();
 
     const [activeTab, setActiveTab] = useState("text");
     const [inputText, setInputText] = useState("");
@@ -34,8 +38,8 @@ export function Translate() {
     const playSequenceRef = useRef(false);
 
     const resolveUrl = useCallback(
-        (token) => resolveTokenToFile(registry, token),
-        [registry]
+        (token) => resolveTokenToFile(registry, token, user?.avatar || "AJ"),
+        [registry, user?.avatar]
     );
 
     const playStream = useCallback(
@@ -50,6 +54,7 @@ export function Translate() {
                 const url = resolveUrl(item.token);
                 setCurrentIndex(i);
                 setCurrentAnimUrl(url);
+                speak(item.token);
                 await new Promise((r) => setTimeout(r, ANIMATION_DURATION_MS));
             }
 
@@ -58,7 +63,7 @@ export function Translate() {
             setIsPlaying(false);
             playSequenceRef.current = false;
         },
-        [resolveUrl]
+        [resolveUrl, speak]
     );
 
     const stopPlayback = () => {
@@ -66,7 +71,26 @@ export function Translate() {
         setIsPlaying(false);
         setCurrentIndex(-1);
         setCurrentAnimUrl(null);
+        window.speechSynthesis.cancel();
     };
+
+    useEffect(() => {
+        if (location.state?.text && location.state?.stream) {
+            setInputText(location.state.text);
+            setOutputAsl(location.state.asl || "");
+            setAnimationStream(location.state.stream);
+            setActiveTab("text");
+            
+            // Auto-play the animation after a short delay
+            setTimeout(() => playStream(location.state.stream), 500);
+            
+            // Clear the location state so it doesn't replay on refresh
+            window.history.replaceState({}, document.title);
+        } else if (location.state?.activeTab) {
+            setActiveTab(location.state.activeTab);
+            window.history.replaceState({}, document.title);
+        }
+    }, [location, playStream]);
 
     const toggleListening = () => {
         if (isListening) {
@@ -99,25 +123,21 @@ export function Translate() {
     };
 
     const handleFileChange = (e) => {
-        const file = e.target.files[0];
+        const file = e.target.files?.[0];
         if (!file) return;
-        if (!file.name.endsWith(".txt")) {
-            addToast({ title: "Unsupported File", description: "Only .txt files are supported.", type: "error" });
+        const lowerName = file.name.toLowerCase();
+        if (!lowerName.endsWith(".txt") && !lowerName.endsWith(".pdf")) {
+            addToast({ title: "Unsupported File", description: "Only .txt and .pdf files are supported.", type: "error" });
             return;
         }
         setSelectedFile(file);
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-            const extracted = ev.target.result.slice(0, 2000);
-            setInputText(extracted);
-            addToast({ title: "File Loaded", description: "Text extracted from " + file.name, type: "success" });
-            setActiveTab("text");
-        };
-        reader.readAsText(file);
+        addToast({ title: "File Loaded", description: "Ready to translate " + file.name, type: "success" });
     };
 
     const handleTextSubmit = async () => {
-        if (!inputText.trim()) return;
+        if (activeTab !== "document" && !inputText.trim()) return;
+        if (activeTab === "document" && !selectedFile) return;
+
         stopPlayback();
         setIsTranslating(true);
 
@@ -125,11 +145,22 @@ export function Translate() {
         const filename = selectedFile && activeTab === "document" ? selectedFile.name : null;
 
         try {
-            const data = await api.post("/text", {
-                text: inputText.trim(),
-                type: payloadType,
-                ...(filename && { filename }),
-            });
+            let data;
+            if (activeTab === "document" && selectedFile) {
+                const formData = new FormData();
+                formData.append("file", selectedFile);
+                data = await api.postMultipart("/uploads", formData);
+                
+                if (data.extracted_text) {
+                    setInputText(data.extracted_text);
+                }
+            } else {
+                data = await api.post("/text", {
+                    text: inputText.trim(),
+                    type: payloadType,
+                    ...(filename && { filename }),
+                });
+            }
 
             const stream = data.animation_stream || [];
             setOutputAsl(data.asl_grammar_output || "");
@@ -274,7 +305,7 @@ export function Translate() {
                                 ref={fileInputRef}
                                 onChange={handleFileChange}
                                 className="hidden"
-                                accept=".txt"
+                                accept=".txt,.pdf"
                             />
                             <Card
                                 onClick={() => fileInputRef.current?.click()}
@@ -284,7 +315,7 @@ export function Translate() {
                                     <Upload size={28} />
                                 </div>
                                 <h3 className="text-lg font-bold">Upload a Document</h3>
-                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">TXT files supported. Text is extracted client-side.</p>
+                                <p className="text-sm text-[var(--text-secondary)] mt-1 mb-4">TXT and PDF files supported. Text is extracted securely.</p>
                                 <Button size="sm" type="button" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>Select File</Button>
                                 {selectedFile && (
                                     <div className="flex items-center gap-2 mt-4 bg-[var(--bg-surface)] px-4 py-2 border border-[var(--border-color)] rounded-lg shadow-sm">
@@ -299,7 +330,7 @@ export function Translate() {
                                 )}
                             </Card>
                             {selectedFile && (
-                                <Button onClick={handleTextSubmit} disabled={!inputText.trim() || isTranslating} className="mt-8 rounded-full px-8 shadow-lg w-full max-w-xs">
+                                <Button onClick={handleTextSubmit} disabled={isTranslating} className="mt-8 rounded-full px-8 shadow-lg w-full max-w-xs">
                                     {isTranslating ? <Loader2 size={18} className="animate-spin" /> : <><Send size={18} className="mr-2" /> Translate Document</>}
                                 </Button>
                             )}
@@ -309,8 +340,8 @@ export function Translate() {
             </Card>
 
             <Card className="flex-1 flex flex-col shadow-xl overflow-hidden border-[var(--border-color)] bg-[var(--bg-surface)]">
-                <div className="flex-[2] bg-zinc-900 relative group overflow-hidden">
-                    <AvatarRenderer animationUrl={currentAnimUrl} playing={isPlaying} />
+                <div className="flex-[2] bg-[var(--bg-background)] relative group overflow-hidden">
+                    <AvatarRenderer animationUrl={currentAnimUrl || `/animations/sentiments/${user?.avatar || "AJ"}/${user?.avatar || "AJ"}_sa001_happy.fbx`} playing={isPlaying || !currentAnimUrl} avatarName={user?.avatar || "AJ"} />
 
                     {isPlaying && currentIndex >= 0 && animationStream[currentIndex] && (
                         <div className="absolute top-4 left-1/2 -translate-x-1/2 flex flex-col items-center animate-in fade-in zoom-in duration-300 pointer-events-none">
@@ -334,10 +365,23 @@ export function Translate() {
                     )}
 
                     <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Button size="icon" variant="ghost" className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
-                            <Volume2 size={18} />
+                        <Button 
+                            size="icon" 
+                            variant="ghost" 
+                            className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSound();
+                                addToast({
+                                    title: !isSoundEnabled ? "Sound Enabled" : "Sound Disabled",
+                                    type: "success"
+                                });
+                            }}
+                            title={isSoundEnabled ? "Disable Sound" : "Enable Sound"}
+                        >
+                            {isSoundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
                         </Button>
-                        <Button size="icon" variant="ghost" className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm">
+                        <Button size="icon" variant="ghost" className="bg-black/40 text-white hover:bg-black/60 rounded-full h-10 w-10 backdrop-blur-sm" onClick={() => window.location.href = "/settings"}>
                             <Settings size={18} />
                         </Button>
                     </div>

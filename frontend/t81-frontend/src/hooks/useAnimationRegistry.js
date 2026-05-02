@@ -24,11 +24,13 @@ async function fetchRegistry() {
     return _registryPromise;
 }
 
-export function resolveTokenToFile(registry, token) {
+export function resolveTokenToFile(registry, token, avatarName = "AJ") {
     const tokenLower = token.toLowerCase();
     for (const [, entry] of Object.entries(registry)) {
         if (entry.tags && entry.tags.includes(tokenLower)) {
-            return entry.file;
+            if (entry.file_template) {
+                return entry.file_template.replace(/\{avatar\}/g, avatarName);
+            }
         }
     }
     return null;

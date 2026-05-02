@@ -18,7 +18,9 @@ import {
     PanelLeftOpen,
     PanelLeftClose,
     Keyboard,
-    Clock
+    Clock,
+    Crown,
+    BookOpen
 } from "lucide-react";
 import { useTheme } from "../../context/ThemeContext";
 import { useSound } from "../../context/SoundContext";
@@ -101,6 +103,7 @@ export function Sidebar({ collapsed, setCollapsed, isMobile, isOpen, setIsOpen }
 
     const MAIN_MENU = [
         { label: "SignFusion App", icon: Keyboard, path: "/translate" },
+        { label: "Learn Sign Language", icon: BookOpen, path: "/learn" },
         { label: "History", icon: Clock, path: "/history" },
         { label: "Uploads", icon: UploadCloud, path: "/uploads" },
     ];
@@ -124,6 +127,7 @@ export function Sidebar({ collapsed, setCollapsed, isMobile, isOpen, setIsOpen }
     ];
 
     const SUPPORT = [
+        { label: "Upgrade Plan", icon: Crown, path: "/plans" },
         { label: "Feedback & Help", icon: MessageSquare, path: "/support" },
     ];
 

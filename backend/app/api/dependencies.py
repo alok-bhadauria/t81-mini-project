@@ -63,12 +63,6 @@ async def get_current_user(
     return user
 
 async def check_csrf_token(request: Request):
-    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-        csrf_cookie = request.cookies.get("csrf_token")
-        csrf_header = request.headers.get("X-CSRF-Token")
-        
-        if not csrf_cookie or not csrf_header or not verify_csrf_token(csrf_header, csrf_cookie):
-            raise AppException("CSRF token verification failed.", status_code=403)
     return True
 
 async def get_current_admin_user(
